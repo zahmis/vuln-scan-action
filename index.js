@@ -55,9 +55,9 @@ async function run() {
       });
 
       console.log('変更されたファイル:');
-      files.forEach(file => {
+      for (const file of files) {
         console.log(`- ${file.filename} (${file.status}, 変更: +${file.additions}/-${file.deletions})`);
-      });
+      }
     } else {
       console.log(`現在のイベントタイプ: ${context.eventName} (PRイベントではありません)`);
     }
