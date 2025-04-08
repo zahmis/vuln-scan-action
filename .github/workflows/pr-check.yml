@@ -15,10 +15,10 @@ jobs:
   security-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Run Security Check
-        uses: zahmis/vuln-scan-action@v1.0.6
+        uses: zahmis/vuln-scan-action@v1.0.8
         with:
           severity-level: 'medium'
           scan-directory: '.'
