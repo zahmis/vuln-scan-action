@@ -6,7 +6,10 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: write
+  issues: read
+  checks: write
+  statuses: write
 
 jobs:
   security-check:
