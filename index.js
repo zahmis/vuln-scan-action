@@ -11,9 +11,9 @@ async function run() {
     const context = github.context;
     
     console.log('開始: 脆弱性スキャン');
-    console.log('重要度レベル: ' + severityLevel);
-    console.log('スキャン対象ディレクトリ: ' + scanDirectory);
-    console.log('リポジトリ: ' + context.repo.owner + '/' + context.repo.repo);
+    console.log(`重要度レベル: ${severityLevel}`);
+    console.log(`スキャン対象ディレクトリ: ${scanDirectory}`);
+    console.log(`リポジトリ: ${context.repo.owner}/${context.repo.repo}`);
     
     // ここでは単純な出力のみ（実際のスキャンロジックはここに実装します）
     core.info('これは脆弱性スキャンのデモ実装です');
@@ -25,7 +25,7 @@ async function run() {
     // 成功メッセージをセット
     core.setOutput('result', '脆弱性は検出されませんでした');
   } catch (error) {
-    core.setFailed('アクションが失敗しました: ' + error.message);
+    core.setFailed(`アクションが失敗しました: ${error.message}`);
   }
 }
 
