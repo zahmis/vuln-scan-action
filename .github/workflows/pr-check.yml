@@ -4,6 +4,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   security-check:
     runs-on: ubuntu-latest
@@ -11,7 +15,7 @@ jobs:
       - uses: actions/checkout@v3
       
       - name: Run Security Check
-        uses: zahmis/vuln-scan-action@v1.0.3
+        uses: zahmis/vuln-scan-action@v1.0.5
         with:
           severity-level: 'medium'
           scan-directory: '.'
