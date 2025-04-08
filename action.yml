@@ -1,16 +1,24 @@
-name: 'Wai Vulnerability Scanner'
-description: 'シンプルな脆弱性スキャンのためのGitHub Action'
+name: 'Vulnerability Scanner Action'
+description: 'Scan repository for security vulnerabilities'
 author: 'wai'
 
 inputs:
   severity-level:
-    description: '検出する脆弱性の最小重要度レベル'
-    required: false
+    description: 'Minimum severity level to report'
+    required: true
     default: 'medium'
   scan-directory:
-    description: 'スキャン対象のディレクトリ'
-    required: false
+    description: 'Directory to scan'
+    required: true
     default: '.'
+  github-token:
+    description: 'GitHub token for API access'
+    required: true
+    default: ${{ github.token }}
+
+outputs:
+  result:
+    description: 'Scan result summary'
 
 runs:
   using: 'node16'
