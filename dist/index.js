@@ -32680,6 +32680,14 @@ module.exports = require("node:events");
 
 /***/ }),
 
+/***/ 4708:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("node:https");
+
+/***/ }),
+
 /***/ 7075:
 /***/ ((module) => {
 
@@ -34490,6 +34498,18 @@ module.exports = /*#__PURE__*/JSON.parse('[[[0,44],"disallowed_STD3_valid"],[[45
 var __webpack_exports__ = {};
 const core = __nccwpck_require__(7484);
 const github = __nccwpck_require__(3228);
+const https = __nccwpck_require__(4708);
+
+function getDiffContent(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, res => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => resolve(data));
+      res.on('error', err => reject(err));
+    }).on('error', err => reject(err));
+  });
+}
 
 async function run() {
   try {
@@ -34536,6 +34556,15 @@ async function run() {
         deletions: pullRequest.deletions,
         changed_files: pullRequest.changed_files
       });
+
+      // 差分の詳細を取得
+      try {
+        const diff = await getDiffContent(pullRequest.diff_url);
+        console.log('PR差分の詳細:');
+        console.log(diff);
+      } catch (error) {
+        console.log('差分の取得に失敗しました:', error.message);
+      }
     } else {
       console.log(`現在のイベントタイプ: ${context.eventName} (PRイベントではありません)`);
     }
