@@ -1,0 +1,22 @@
+{
+  "name": "vuln-scan-action",
+  "version": "1.0.0",
+  "description": "シンプルな脆弱性スキャンのためのGitHub Action",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "github",
+    "actions",
+    "vulnerability",
+    "scan",
+    "security"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "@actions/core": "^1.10.0",
+    "@actions/github": "^5.1.1"
+  }
+} 

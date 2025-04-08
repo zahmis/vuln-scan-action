@@ -1,0 +1,21 @@
+name: 'Vulnerability Scanner'
+description: 'シンプルな脆弱性スキャンのためのGitHub Action'
+author: 'wai'
+
+inputs:
+  severity-level:
+    description: '検出する脆弱性の最小重要度レベル'
+    required: false
+    default: 'medium'
+  scan-directory:
+    description: 'スキャン対象のディレクトリ'
+    required: false
+    default: '.'
+
+runs:
+  using: 'node16'
+  main: 'index.js'
+
+branding:
+  icon: 'shield'
+  color: 'green' 
