@@ -31,33 +31,21 @@ async function run() {
       }
     });
 
-    // PRの場合、差分を取得
+    // PRの場合、情報を表示
     if (context.eventName === 'pull_request') {
       console.log('PRイベントを検出しました');
-      const { data: pullRequest } = await octokit.rest.pulls.get({
-        owner: context.repo.owner,
-        repo: context.repo.repo,
-        pull_number: context.payload.pull_request.number
-      });
+      const pullRequest = context.payload.pull_request;
 
       console.log('PR情報:', {
         number: pullRequest.number,
         title: pullRequest.title,
         base: pullRequest.base.ref,
-        head: pullRequest.head.ref
+        head: pullRequest.head.ref,
+        commits: pullRequest.commits,
+        additions: pullRequest.additions,
+        deletions: pullRequest.deletions,
+        changed_files: pullRequest.changed_files
       });
-
-      // 差分を取得
-      const { data: files } = await octokit.rest.pulls.listFiles({
-        owner: context.repo.owner,
-        repo: context.repo.repo,
-        pull_number: context.payload.pull_request.number
-      });
-
-      console.log('変更されたファイル:');
-      for (const file of files) {
-        console.log(`- ${file.filename} (${file.status}, 変更: +${file.additions}/-${file.deletions})`);
-      }
     } else {
       console.log(`現在のイベントタイプ: ${context.eventName} (PRイベントではありません)`);
     }

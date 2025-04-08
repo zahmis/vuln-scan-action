@@ -4,16 +4,15 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
-permissions:
-  contents: read
-  pull-requests: write
-  issues: read
-  checks: write
-  statuses: write
-
 jobs:
   security-check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      checks: write
+      statuses: write
     steps:
       - uses: actions/checkout@v4
       
