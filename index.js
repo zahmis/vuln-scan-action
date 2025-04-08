@@ -16,19 +16,50 @@ async function run() {
     console.log(`重要度レベル: ${severityLevel}`);
     console.log(`スキャン対象ディレクトリ: ${scanDirectory}`);
     console.log(`リポジトリ: ${context.repo.owner}/${context.repo.repo}`);
+    console.log('GitHub Context:', {
+      eventName: context.eventName,
+      sha: context.sha,
+      ref: context.ref,
+      workflow: context.workflow,
+      action: context.action,
+      actor: context.actor,
+      payload: {
+        ...context.payload,
+        // 大きすぎる可能性のあるフィールドは除外
+        repository: '[Repository Object]',
+        sender: '[Sender Object]'
+      }
+    });
 
     // PRの場合、差分を取得
-    if (context.payload.pull_request) {
-      const { data: diff } = await octokit.rest.pulls.get({
+    if (context.eventName === 'pull_request') {
+      console.log('PRイベントを検出しました');
+      const { data: pullRequest } = await octokit.rest.pulls.get({
         owner: context.repo.owner,
         repo: context.repo.repo,
-        pull_number: context.payload.pull_request.number,
-        mediaType: {
-          format: 'diff'
-        }
+        pull_number: context.payload.pull_request.number
       });
-      console.log('PR差分:');
-      console.log(diff);
+
+      console.log('PR情報:', {
+        number: pullRequest.number,
+        title: pullRequest.title,
+        base: pullRequest.base.ref,
+        head: pullRequest.head.ref
+      });
+
+      // 差分を取得
+      const { data: files } = await octokit.rest.pulls.listFiles({
+        owner: context.repo.owner,
+        repo: context.repo.repo,
+        pull_number: context.payload.pull_request.number
+      });
+
+      console.log('変更されたファイル:');
+      files.forEach(file => {
+        console.log(`- ${file.filename} (${file.status}, 変更: +${file.additions}/-${file.deletions})`);
+      });
+    } else {
+      console.log(`現在のイベントタイプ: ${context.eventName} (PRイベントではありません)`);
     }
     
     // ここでは単純な出力のみ（実際のスキャンロジックはここに実装します）
