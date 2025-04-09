@@ -14,13 +14,14 @@ jobs:
       - uses: actions/checkout@v3
       
       - name: 脆弱性スキャンを実行
-        uses: zahmis/vuln-scan-action@v1.0.25
+        uses: zahmis/vuln-scan-action@v1.0.33
         with:
-          severity-level: 'high'
-          scan-directory: '.'
-          perplexity-api-key: ${{ secrets.PERPLEXITY_API_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          perplexity-api-key: ${{ secrets.PERPLEXITY_API_KEY }}
+          severity-level: medium
+          scan-directory: '.'
 
 permissions:
+  contents: read
   issues: write
   pull-requests: write 
