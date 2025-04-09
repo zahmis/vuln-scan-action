@@ -40082,7 +40082,7 @@ async function analyzeDependencies(diff) {
    - Specific code areas that need review
    - Concrete mitigation recommendations
 
-Return the analysis in the following JSON format:
+Return ONLY the JSON data without any markdown formatting or code block indicators. The response should start directly with { and end with }:
 {
   "dependencies": [
     {
@@ -40128,7 +40128,21 @@ Return the analysis in the following JSON format:
         'Accept': 'application/json'
       }
     });
-    return response.data.choices[0].message.content;
+
+    try {
+      // マークダウンフォーマットを削除
+      let content = response.data.choices[0].message.content;
+      // ```json や ``` などのマークダウン記号を削除
+      content = content.replace(/^```json\s*\n|\n```\s*$/g, '');
+      // 先頭と末尾の空白を削除
+      content = content.trim();
+      
+      const analysisResult = JSON.parse(content);
+      return analysisResult;
+    } catch (error) {
+      console.log('依存関係分析のレスポンスパースに失敗しました。生のレスポンス:', response.data.choices[0].message.content);
+      throw new Error(`依存関係の分析に失敗しました: ${error.message}`);
+    }
   } catch (error) {
     throw new Error(`依存関係の分析に失敗しました: ${error.message}`);
   }
@@ -40161,7 +40175,7 @@ async function analyzeVulnerabilities(diff, severityLevel) {
 
 3. Provide detailed vulnerability assessment with severity level ${severityLevel} or higher.
 
-Return the analysis in the following JSON format:
+Return ONLY the JSON data without any markdown formatting or code block indicators. The response should start directly with { and end with }:
 {
   "vulnerabilities": [
     {
@@ -40212,9 +40226,16 @@ Return the analysis in the following JSON format:
     });
 
     try {
-      const analysisResult = JSON.parse(response.data.choices[0].message.content);
+      // マークダウンフォーマットを削除
+      let content = response.data.choices[0].message.content;
+      // ```json や ``` などのマークダウン記号を削除
+      content = content.replace(/^```json\s*\n|\n```\s*$/g, '');
+      // 先頭と末尾の空白を削除
+      content = content.trim();
+      
+      const analysisResult = JSON.parse(content);
       if (!analysisResult.vulnerabilities || !Array.isArray(analysisResult.vulnerabilities)) {
-        console.log('予期しない形式のレスポンス:', response.data.choices[0].message.content);
+        console.log('予期しない形式のレスポンス:', content);
         return {
           vulnerabilities: [],
           analysis_metadata: analysisResult.analysis_metadata || {
