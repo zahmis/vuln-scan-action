@@ -40213,10 +40213,28 @@ Return the analysis in the following JSON format:
 
     try {
       const analysisResult = JSON.parse(response.data.choices[0].message.content);
+      if (!analysisResult.vulnerabilities || !Array.isArray(analysisResult.vulnerabilities)) {
+        console.log('予期しない形式のレスポンス:', response.data.choices[0].message.content);
+        return {
+          vulnerabilities: [],
+          analysis_metadata: analysisResult.analysis_metadata || {
+            scan_coverage: ['Limited scan due to response format issues'],
+            confidence_level: 'low',
+            limitations: ['Response format did not match expected structure']
+          }
+        };
+      }
       return analysisResult;
     } catch (parseError) {
       console.log('APIレスポンスのパースに失敗しました。生のレスポンス:', response.data.choices[0].message.content);
-      throw new Error('脆弱性分析の結果をパースできませんでした');
+      return {
+        vulnerabilities: [],
+        analysis_metadata: {
+          scan_coverage: ['Limited scan due to parse error'],
+          confidence_level: 'low',
+          limitations: ['Failed to parse API response']
+        }
+      };
     }
   } catch (error) {
     throw new Error(`脆弱性スキャンに失敗しました: ${error.message}`);
