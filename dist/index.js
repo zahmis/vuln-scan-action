@@ -40058,6 +40058,7 @@ async function getDiffContent(octokit, owner, repo, pullNumber) {
 
 async function analyzeDependencies(diff) {
   try {
+    const apiKey = core.getInput('perplexity-api-key');
     const response = await axios.post(PERPLEXITY_API_ENDPOINT, {
       model: "sonar-pro",
       messages: [
@@ -40072,7 +40073,7 @@ async function analyzeDependencies(diff) {
       ]
     }, {
       headers: {
-        'Authorization': `Bearer ${process.env.PERPLEXITY_API_KEY}`,
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       }
@@ -40085,6 +40086,7 @@ async function analyzeDependencies(diff) {
 
 async function analyzeVulnerabilities(diff, severityLevel) {
   try {
+    const apiKey = core.getInput('perplexity-api-key');
     const response = await axios.post(PERPLEXITY_API_ENDPOINT, {
       model: "sonar-pro",
       messages: [
@@ -40099,7 +40101,7 @@ async function analyzeVulnerabilities(diff, severityLevel) {
       ]
     }, {
       headers: {
-        'Authorization': `Bearer ${process.env.PERPLEXITY_API_KEY}`,
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       }
@@ -40120,10 +40122,6 @@ async function run() {
     const severityLevel = core.getInput('severity-level');
     const scanDirectory = core.getInput('scan-directory');
     const token = core.getInput('github-token');
-    const perplexityApiKey = core.getInput('perplexity-api-key');
-
-    // 環境変数にAPIキーを設定
-    process.env.PERPLEXITY_API_KEY = perplexityApiKey;
 
     // GitHub APIクライアントを初期化
     const octokit = github.getOctokit(token);
