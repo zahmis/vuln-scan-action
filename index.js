@@ -29,11 +29,61 @@ async function analyzeDependencies(diff) {
       messages: [
         {
           role: "system",
-          content: "依存関係の変更を分析し、セキュリティ上の問題がないか確認してください。結果はJSON形式で返してください。"
+          content: `You are a security expert specializing in dependency analysis and vulnerability assessment. Your task is to:
+
+1. Identify all dependency changes in the provided diff
+2. For each dependency:
+   - Compare version changes and analyze semantic versioning implications
+   - Research and cite specific CVEs or security advisories
+   - Review release notes, changelogs, and relevant GitHub issues
+   - Analyze potential security impact of the changes
+   - Check for transitive dependency conflicts or vulnerabilities
+   - Examine implementation changes that might affect security
+
+3. Provide a comprehensive security assessment including:
+   - Direct security implications
+   - Indirect security risks (e.g., dependency chain issues)
+   - Compatibility concerns
+   - Specific code areas that need review
+   - Concrete mitigation recommendations
+
+Return the analysis in the following JSON format:
+{
+  "dependencies": [
+    {
+      "name": "package name",
+      "version_change": {
+        "from": "old version",
+        "to": "new version"
+      },
+      "security_findings": {
+        "severity": "critical|high|medium|low",
+        "cves": ["CVE-ID"],
+        "description": "Detailed security impact description",
+        "affected_components": ["specific components or features affected"],
+        "evidence": {
+          "release_notes": "relevant release note excerpts",
+          "implementation_changes": "security-relevant code changes",
+          "references": ["links to issues, PRs, or discussions"]
+        }
+      },
+      "recommendations": {
+        "actions": ["specific actions to take"],
+        "alternatives": ["alternative solutions if applicable"],
+        "additional_monitoring": ["areas or components to monitor"]
+      }
+    }
+  ],
+  "overall_risk_assessment": {
+    "risk_level": "critical|high|medium|low",
+    "summary": "Overall security impact summary",
+    "requires_immediate_action": boolean
+  }
+}`
         },
         {
           role: "user",
-          content: `以下のPR差分から依存関係の変更を分析してください:\n\n${diff}`
+          content: `Analyze this dependency change diff for security implications:\n\n${diff}`
         }
       ]
     }, {
@@ -57,18 +107,61 @@ async function analyzeVulnerabilities(diff, severityLevel) {
       messages: [
         {
           role: "system",
-          content: `Analyze the code diff for security vulnerabilities with severity level ${severityLevel} or higher. 
-          Return the result in the following JSON format:
-          {
-            "vulnerabilities": [
-              {
-                "severity": "high|medium|low|critical",
-                "description": "description of the vulnerability",
-                "location": "file or area where the vulnerability was found",
-                "recommendation": "how to fix the vulnerability"
-              }
-            ]
-          }`
+          content: `You are a security vulnerability analyzer with deep expertise in code review and security assessment. Your task is to:
+
+1. Perform deep analysis of code changes:
+   - Identify potential security vulnerabilities
+   - Analyze code patterns and anti-patterns
+   - Review API usage and security implications
+   - Check for common vulnerability types (OWASP Top 10, etc.)
+   - Examine error handling and input validation
+   - Assess authentication and authorization changes
+
+2. Consider broader security context:
+   - Impact on existing security controls
+   - Integration points and trust boundaries
+   - Data flow security implications
+   - Configuration changes affecting security
+   - Compliance implications
+
+3. Provide detailed vulnerability assessment with severity level ${severityLevel} or higher.
+
+Return the analysis in the following JSON format:
+{
+  "vulnerabilities": [
+    {
+      "severity": "critical|high|medium|low",
+      "type": "vulnerability category (e.g., XSS, CSRF, etc.)",
+      "description": "Detailed description of the vulnerability",
+      "technical_details": {
+        "affected_code": "specific code snippets or patterns",
+        "attack_vectors": ["possible attack scenarios"],
+        "impact_analysis": "potential security impact",
+        "root_cause": "underlying security issue"
+      },
+      "evidence": {
+        "code_location": "file and line numbers",
+        "proof_of_concept": "how the vulnerability could be exploited",
+        "related_cves": ["similar CVEs if applicable"]
+      },
+      "mitigation": {
+        "recommended_fix": "specific code changes or security controls",
+        "alternative_solutions": ["other possible fixes"],
+        "security_best_practices": ["relevant security guidelines"]
+      },
+      "risk_assessment": {
+        "likelihood": "high|medium|low",
+        "impact": "high|medium|low",
+        "exploit_complexity": "high|medium|low"
+      }
+    }
+  ],
+  "analysis_metadata": {
+    "scan_coverage": ["areas analyzed"],
+    "confidence_level": "high|medium|low",
+    "limitations": ["any limitations in the analysis"]
+  }
+}`
         },
         {
           role: "user",
@@ -85,19 +178,10 @@ async function analyzeVulnerabilities(diff, severityLevel) {
 
     try {
       const analysisResult = JSON.parse(response.data.choices[0].message.content);
-      return {
-        vulnerabilities: analysisResult.vulnerabilities || []
-      };
+      return analysisResult;
     } catch (parseError) {
       console.log('APIレスポンスのパースに失敗しました。生のレスポンス:', response.data.choices[0].message.content);
-      return {
-        vulnerabilities: [{
-          severity: 'high',
-          description: '脆弱性分析の結果をパースできませんでした',
-          location: 'N/A',
-          recommendation: 'APIレスポンスの形式を確認してください'
-        }]
-      };
+      throw new Error('脆弱性分析の結果をパースできませんでした');
     }
   } catch (error) {
     throw new Error(`脆弱性スキャンに失敗しました: ${error.message}`);
@@ -137,31 +221,82 @@ async function run() {
         console.log('脆弱性スキャン結果:', vulnerabilityResults);
 
         // 結果の処理
-        if (vulnerabilityResults.vulnerabilities.length > 0) {
-          const vulnerabilitiesByLevel = vulnerabilityResults.vulnerabilities.reduce((acc, vuln) => {
-            acc[vuln.severity] = (acc[vuln.severity] || 0) + 1;
-            return acc;
-          }, {});
+        let hasHighSeverity = false;
+        let securityReport = '## セキュリティ分析レポート\n\n';
 
-          // 結果の詳細をコメントとして出力
-          core.notice(`脆弱性スキャン結果:
-            - 重大: ${vulnerabilitiesByLevel.critical || 0}
-            - 高: ${vulnerabilitiesByLevel.high || 0}
-            - 中: ${vulnerabilitiesByLevel.medium || 0}
-            - 低: ${vulnerabilitiesByLevel.low || 0}
-          `);
-
-          // 設定された重要度レベル以上の脆弱性が見つかった場合はエラーを出力
-          const severityLevels = ['low', 'medium', 'high', 'critical'];
-          const severityIndex = severityLevels.indexOf(severityLevel.toLowerCase());
-          const hasHighSeverity = vulnerabilityResults.vulnerabilities.some(
-            vuln => severityLevels.indexOf(vuln.severity.toLowerCase()) >= severityIndex
-          );
-
-          if (hasHighSeverity) {
-            core.setFailed(`設定された重要度レベル(${severityLevel})以上の脆弱性が検出されました`);
-            return;
+        // 依存関係の分析結果を追加
+        if (dependencyAnalysis) {
+          const depAnalysis = JSON.parse(dependencyAnalysis);
+          securityReport += '### 依存関係の分析\n\n';
+          
+          for (const dep of depAnalysis.dependencies) {
+            securityReport += `#### ${dep.name}\n`;
+            securityReport += `- バージョン変更: ${dep.version_change.from} → ${dep.version_change.to}\n`;
+            if (dep.security_findings) {
+              securityReport += `- 重要度: ${dep.security_findings.severity}\n`;
+              if (dep.security_findings.cves.length > 0) {
+                securityReport += `- 関連するCVE: ${dep.security_findings.cves.join(', ')}\n`;
+              }
+              securityReport += `- 詳細: ${dep.security_findings.description}\n`;
+              securityReport += `- 影響を受けるコンポーネント: ${dep.security_findings.affected_components.join(', ')}\n`;
+              securityReport += '- 証拠:\n';
+              securityReport += `  - リリースノート: ${dep.security_findings.evidence.release_notes}\n`;
+              securityReport += `  - 実装の変更: ${dep.security_findings.evidence.implementation_changes}\n`;
+            }
+            securityReport += '\n推奨される対応:\n';
+            for (const action of dep.recommendations.actions) {
+              securityReport += `- ${action}\n`;
+            }
+            securityReport += '\n';
           }
+
+          securityReport += '### 全体的なリスク評価\n';
+          securityReport += `- リスクレベル: ${depAnalysis.overall_risk_assessment.risk_level}\n`;
+          securityReport += `- 概要: ${depAnalysis.overall_risk_assessment.summary}\n`;
+          securityReport += `- 即時対応の必要性: ${depAnalysis.overall_risk_assessment.requires_immediate_action ? 'あり' : 'なし'}\n\n`;
+        }
+
+        // 脆弱性スキャン結果を追加
+        if (vulnerabilityResults.vulnerabilities) {
+          securityReport += '### 脆弱性スキャン結果\n\n';
+          
+          for (const vuln of vulnerabilityResults.vulnerabilities) {
+            if (severityLevels.indexOf(vuln.severity.toLowerCase()) >= severityIndex) {
+              hasHighSeverity = true;
+            }
+            
+            securityReport += `#### ${vuln.type}\n`;
+            securityReport += `- 重要度: ${vuln.severity}\n`;
+            securityReport += `- 説明: ${vuln.description}\n`;
+            securityReport += '- 技術的詳細:\n';
+            securityReport += `  - 影響を受けるコード: ${vuln.technical_details.affected_code}\n`;
+            securityReport += `  - 攻撃ベクトル: ${vuln.technical_details.attack_vectors.join(', ')}\n`;
+            securityReport += `  - 影響分析: ${vuln.technical_details.impact_analysis}\n`;
+            securityReport += `  - 根本原因: ${vuln.technical_details.root_cause}\n`;
+            securityReport += '- 対策:\n';
+            securityReport += `  - 推奨される修正: ${vuln.mitigation.recommended_fix}\n`;
+            securityReport += `  - セキュリティベストプラクティス: ${vuln.mitigation.security_best_practices.join(', ')}\n\n`;
+          }
+
+          if (vulnerabilityResults.analysis_metadata) {
+            securityReport += '### 分析メタデータ\n';
+            securityReport += `- スキャン範囲: ${vulnerabilityResults.analysis_metadata.scan_coverage.join(', ')}\n`;
+            securityReport += `- 信頼度: ${vulnerabilityResults.analysis_metadata.confidence_level}\n`;
+            securityReport += `- 制限事項: ${vulnerabilityResults.analysis_metadata.limitations.join(', ')}\n`;
+          }
+        }
+
+        // コメントとして結果を投稿
+        await octokit.rest.issues.createComment({
+          owner: context.repo.owner,
+          repo: context.repo.repo,
+          issue_number: pullRequest.number,
+          body: securityReport
+        });
+
+        if (hasHighSeverity) {
+          core.setFailed(`設定された重要度レベル(${severityLevel})以上の脆弱性が検出されました`);
+          return;
         }
 
         core.notice('スキャン完了: 重大な脆弱性は見つかりませんでした');
