@@ -19,4 +19,8 @@ jobs:
           severity-level: 'high'
           scan-directory: '.'
           perplexity-api-key: ${{ secrets.PERPLEXITY_API_KEY }}
-          github-token: ${{ secrets.GITHUB_TOKEN }} 
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+permissions:
+  issues: write
+  pull-requests: write 
