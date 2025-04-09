@@ -253,46 +253,57 @@ async function run() {
 
         // 依存関係の分析
         const dependencyAnalysis = await analyzeDependencies(diff);
-        console.log('依存関係の分析結果:', dependencyAnalysis);
+        console.log('依存関係の分析結果:', JSON.stringify(dependencyAnalysis, null, 2));
 
         // 脆弱性スキャン
         const vulnerabilityResults = await analyzeVulnerabilities(diff, severityLevel);
-        console.log('脆弱性スキャン結果:', vulnerabilityResults);
+        console.log('脆弱性スキャン結果:', JSON.stringify(vulnerabilityResults, null, 2));
 
         // 結果の処理
         let hasHighSeverity = false;
         let securityReport = '## セキュリティ分析レポート\n\n';
 
         // 依存関係の分析結果を追加
-        if (dependencyAnalysis) {
-          const depAnalysis = JSON.parse(dependencyAnalysis);
+        if (dependencyAnalysis && dependencyAnalysis.dependencies) {
           securityReport += '### 依存関係の分析\n\n';
           
-          for (const dep of depAnalysis.dependencies) {
+          for (const dep of dependencyAnalysis.dependencies) {
             securityReport += `#### ${dep.name}\n`;
-            securityReport += `- バージョン変更: ${dep.version_change.from} → ${dep.version_change.to}\n`;
+            if (dep.version_change) {
+              securityReport += `- バージョン変更: ${dep.version_change.from} → ${dep.version_change.to}\n`;
+            }
             if (dep.security_findings) {
               securityReport += `- 重要度: ${dep.security_findings.severity}\n`;
-              if (dep.security_findings.cves.length > 0) {
+              if (dep.security_findings.cves && dep.security_findings.cves.length > 0) {
                 securityReport += `- 関連するCVE: ${dep.security_findings.cves.join(', ')}\n`;
               }
               securityReport += `- 詳細: ${dep.security_findings.description}\n`;
-              securityReport += `- 影響を受けるコンポーネント: ${dep.security_findings.affected_components.join(', ')}\n`;
-              securityReport += '- 証拠:\n';
-              securityReport += `  - リリースノート: ${dep.security_findings.evidence.release_notes}\n`;
-              securityReport += `  - 実装の変更: ${dep.security_findings.evidence.implementation_changes}\n`;
+              if (dep.security_findings.affected_components) {
+                securityReport += `- 影響を受けるコンポーネント: ${dep.security_findings.affected_components.join(', ')}\n`;
+              }
+              if (dep.security_findings.evidence) {
+                securityReport += '- 証拠:\n';
+                securityReport += `  - リリースノート: ${dep.security_findings.evidence.release_notes}\n`;
+                securityReport += `  - 実装の変更: ${dep.security_findings.evidence.implementation_changes}\n`;
+              }
             }
-            securityReport += '\n推奨される対応:\n';
-            for (const action of dep.recommendations.actions) {
-              securityReport += `- ${action}\n`;
+            if (dep.recommendations) {
+              securityReport += '\n推奨される対応:\n';
+              if (dep.recommendations.actions) {
+                for (const action of dep.recommendations.actions) {
+                  securityReport += `- ${action}\n`;
+                }
+              }
             }
             securityReport += '\n';
           }
 
-          securityReport += '### 全体的なリスク評価\n';
-          securityReport += `- リスクレベル: ${depAnalysis.overall_risk_assessment.risk_level}\n`;
-          securityReport += `- 概要: ${depAnalysis.overall_risk_assessment.summary}\n`;
-          securityReport += `- 即時対応の必要性: ${depAnalysis.overall_risk_assessment.requires_immediate_action ? 'あり' : 'なし'}\n\n`;
+          if (dependencyAnalysis.overall_risk_assessment) {
+            securityReport += `### 全体的なリスク評価\n`;
+            securityReport += `- リスクレベル: ${dependencyAnalysis.overall_risk_assessment.risk_level}\n`;
+            securityReport += `- 概要: ${dependencyAnalysis.overall_risk_assessment.summary}\n`;
+            securityReport += `- 即時対応の必要性: ${dependencyAnalysis.overall_risk_assessment.requires_immediate_action ? 'あり' : 'なし'}\n\n`;
+          }
         }
 
         // 脆弱性スキャン結果を追加
@@ -300,28 +311,44 @@ async function run() {
           securityReport += '### 脆弱性スキャン結果\n\n';
           
           for (const vuln of vulnerabilityResults.vulnerabilities) {
-            if (severityLevels.indexOf(vuln.severity.toLowerCase()) >= severityIndex) {
+            const severityLevels = ['low', 'medium', 'high', 'critical'];
+            const severityIndex = severityLevels.indexOf(severityLevel.toLowerCase());
+            if (severityLevels.indexOf(vuln.severity?.toLowerCase()) >= severityIndex) {
               hasHighSeverity = true;
             }
             
-            securityReport += `#### ${vuln.type}\n`;
+            securityReport += '#### ' + (vuln.type || '未分類の脆弱性') + '\n';
             securityReport += `- 重要度: ${vuln.severity}\n`;
             securityReport += `- 説明: ${vuln.description}\n`;
-            securityReport += '- 技術的詳細:\n';
-            securityReport += `  - 影響を受けるコード: ${vuln.technical_details.affected_code}\n`;
-            securityReport += `  - 攻撃ベクトル: ${vuln.technical_details.attack_vectors.join(', ')}\n`;
-            securityReport += `  - 影響分析: ${vuln.technical_details.impact_analysis}\n`;
-            securityReport += `  - 根本原因: ${vuln.technical_details.root_cause}\n`;
-            securityReport += '- 対策:\n';
-            securityReport += `  - 推奨される修正: ${vuln.mitigation.recommended_fix}\n`;
-            securityReport += `  - セキュリティベストプラクティス: ${vuln.mitigation.security_best_practices.join(', ')}\n\n`;
+
+            if (vuln.technical_details) {
+              securityReport += '- 技術的詳細:\n';
+              securityReport += `  - 影響を受けるコード: ${vuln.technical_details.affected_code}\n`;
+              if (vuln.technical_details.attack_vectors) {
+                securityReport += `  - 攻撃ベクトル: ${vuln.technical_details.attack_vectors.join(', ')}\n`;
+              }
+              securityReport += `  - 影響分析: ${vuln.technical_details.impact_analysis}\n`;
+              securityReport += `  - 根本原因: ${vuln.technical_details.root_cause}\n`;
+            }
+
+            if (vuln.mitigation) {
+              securityReport += '- 対策:\n';
+              securityReport += `  - 推奨される修正: ${vuln.mitigation.recommended_fix}\n`;
+              if (vuln.mitigation.security_best_practices) {
+                securityReport += `  - セキュリティベストプラクティス: ${vuln.mitigation.security_best_practices.join(', ')}\n`;
+              }
+            }
+
+            securityReport += '\n';
           }
 
           if (vulnerabilityResults.analysis_metadata) {
             securityReport += '### 分析メタデータ\n';
             securityReport += `- スキャン範囲: ${vulnerabilityResults.analysis_metadata.scan_coverage.join(', ')}\n`;
             securityReport += `- 信頼度: ${vulnerabilityResults.analysis_metadata.confidence_level}\n`;
-            securityReport += `- 制限事項: ${vulnerabilityResults.analysis_metadata.limitations.join(', ')}\n`;
+            if (vulnerabilityResults.analysis_metadata.limitations) {
+              securityReport += `- 制限事項: ${vulnerabilityResults.analysis_metadata.limitations.join(', ')}\n`;
+            }
           }
         }
 
@@ -339,14 +366,21 @@ async function run() {
         }
 
         core.notice('スキャン完了: 重大な脆弱性は見つかりませんでした');
-        core.setOutput('result', '脆弱性は検出されませんでした');
+        core.setOutput('result', JSON.stringify({
+          dependencyAnalysis,
+          vulnerabilityResults,
+          conclusion: '脆弱性は検出されませんでした'
+        }));
       } catch (error) {
         console.error('スキャン中にエラーが発生しました:', error);
         core.setFailed(`スキャンに失敗しました: ${error.message}`);
       }
     } else {
       console.log(`現在のイベントタイプ: ${context.eventName} (PRイベントではありません)`);
-      core.setOutput('result', 'PRイベント以外ではスキャンは実行されません');
+      core.setOutput('result', JSON.stringify({
+        status: 'skipped',
+        reason: 'PRイベント以外ではスキャンは実行されません'
+      }));
     }
   } catch (error) {
     core.setFailed(`アクションが失敗しました: ${error.message}`);
