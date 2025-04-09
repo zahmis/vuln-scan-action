@@ -20,7 +20,7 @@ jobs:
           fetch-depth: 0
       
       - name: Run Security Check
-        uses: zahmis/vuln-scan-action@v1.0.14
+        uses: zahmis/vuln-scan-action@v1.0.16
         with:
           severity-level: 'medium'
           scan-directory: '.'
