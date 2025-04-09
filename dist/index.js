@@ -40092,11 +40092,22 @@ async function analyzeVulnerabilities(diff, severityLevel) {
       messages: [
         {
           role: "system",
-          content: `コードの脆弱性を分析し、${severityLevel}以上の重要度の問題を検出してください。結果はJSON形式で返してください。`
+          content: `Analyze the code diff for security vulnerabilities with severity level ${severityLevel} or higher. 
+          Return the result in the following JSON format:
+          {
+            "vulnerabilities": [
+              {
+                "severity": "high|medium|low|critical",
+                "description": "description of the vulnerability",
+                "location": "file or area where the vulnerability was found",
+                "recommendation": "how to fix the vulnerability"
+              }
+            ]
+          }`
         },
         {
           role: "user",
-          content: `以下のコード差分を分析してください:\n\n${diff}`
+          content: `Analyze this code diff for security vulnerabilities:\n\n${diff}`
         }
       ]
     }, {
@@ -40107,10 +40118,22 @@ async function analyzeVulnerabilities(diff, severityLevel) {
       }
     });
 
-    const analysisResult = JSON.parse(response.data.choices[0].message.content);
-    return {
-      vulnerabilities: analysisResult.vulnerabilities || []
-    };
+    try {
+      const analysisResult = JSON.parse(response.data.choices[0].message.content);
+      return {
+        vulnerabilities: analysisResult.vulnerabilities || []
+      };
+    } catch (parseError) {
+      console.log('APIレスポンスのパースに失敗しました。生のレスポンス:', response.data.choices[0].message.content);
+      return {
+        vulnerabilities: [{
+          severity: 'high',
+          description: '脆弱性分析の結果をパースできませんでした',
+          location: 'N/A',
+          recommendation: 'APIレスポンスの形式を確認してください'
+        }]
+      };
+    }
   } catch (error) {
     throw new Error(`脆弱性スキャンに失敗しました: ${error.message}`);
   }
