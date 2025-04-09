@@ -1,4 +1,4 @@
-require('./sourcemap-register.js');/******/ (() => { // webpackBootstrap
+/******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
 /***/ 4914:
@@ -32680,14 +32680,6 @@ module.exports = require("node:events");
 
 /***/ }),
 
-/***/ 4708:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("node:https");
-
-/***/ }),
-
 /***/ 7075:
 /***/ ((module) => {
 
@@ -34498,17 +34490,21 @@ module.exports = /*#__PURE__*/JSON.parse('[[[0,44],"disallowed_STD3_valid"],[[45
 var __webpack_exports__ = {};
 const core = __nccwpck_require__(7484);
 const github = __nccwpck_require__(3228);
-const https = __nccwpck_require__(4708);
 
-function getDiffContent(url) {
-  return new Promise((resolve, reject) => {
-    https.get(url, res => {
-      let data = '';
-      res.on('data', chunk => { data += chunk; });
-      res.on('end', () => resolve(data));
-      res.on('error', err => reject(err));
-    }).on('error', err => reject(err));
-  });
+async function getDiffContent(octokit, owner, repo, pullNumber) {
+  try {
+    const response = await octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: pullNumber,
+      mediaType: {
+        format: 'diff'
+      }
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(`差分の取得に失敗しました: ${error.message}`);
+  }
 }
 
 async function run() {
@@ -34559,7 +34555,12 @@ async function run() {
 
       // 差分の詳細を取得
       try {
-        const diff = await getDiffContent(pullRequest.diff_url);
+        const diff = await getDiffContent(
+          octokit,
+          context.repo.owner,
+          context.repo.repo,
+          pullRequest.number
+        );
         console.log('PR差分の詳細:');
         console.log(diff);
       } catch (error) {
@@ -34587,4 +34588,3 @@ run();
 module.exports = __webpack_exports__;
 /******/ })()
 ;
-//# sourceMappingURL=index.js.map
