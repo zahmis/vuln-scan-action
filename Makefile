@@ -76,7 +76,7 @@ update-version:
 	@sed -i '' 's/"version": ".*"/"version": "$(subst v,,$(NEXT_VERSION))"/' package.json
 
 # リリースプロセス（ビルド、コミット、タグ付け、プッシュ、リリース作成）
-release: build update-version
+release: clean install build update-version
 	@echo "🚀 リリースプロセスを開始します..."
 	@echo "現在のバージョン: $(VERSION)"
 	@echo "次のバージョン: $(NEXT_VERSION)"
