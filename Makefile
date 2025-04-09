@@ -3,6 +3,7 @@
 # バージョン変数
 VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0")
 NEXT_VERSION ?= $(shell echo $(VERSION) | awk -F. '{$$NF = $$NF + 1;} 1' | sed 's/ /./g')
+BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD)
 
 # デフォルトターゲット
 all: install build
@@ -90,7 +91,7 @@ release: build update-version
 	@echo "🏷️ タグを付けています..."
 	git tag -a $(NEXT_VERSION) -m "Release $(NEXT_VERSION)"
 	@echo "⬆️ 変更をプッシュしています..."
-	git push origin main
+	git push origin $(BRANCH)
 	git push origin $(NEXT_VERSION)
 	@echo "📦 GitHubリリースを作成しています..."
 	gh release create $(NEXT_VERSION) \
