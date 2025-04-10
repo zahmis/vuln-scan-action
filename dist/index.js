@@ -41611,6 +41611,8 @@ const { GoogleGenerativeAI } = __nccwpck_require__(7656);
 const PERPLEXITY_API_ENDPOINT = 'https://api.perplexity.ai/chat/completions';
 const TEMP_DIR_PREFIX = 'dep-clone-';
 
+// --- GitHub Interaction ---
+
 async function getDiffContent(octokit, owner, repo, pullNumber) {
   try {
     const response = await octokit.rest.pulls.get({
@@ -41621,75 +41623,123 @@ async function getDiffContent(octokit, owner, repo, pullNumber) {
         format: 'diff'
       }
     });
+    console.log('PR Diff content successfully retrieved.');
     return response.data;
   } catch (error) {
+    console.error(`Failed to get diff content: ${error.message}`);
     throw new Error(`差分の取得に失敗しました: ${error.message}`);
   }
 }
 
+async function postComment(octokit, owner, repo, issueNumber, body) {
+    const MAX_COMMENT_LENGTH = 65536; // GitHub comment length limit
+    let commentBody = body;
+
+    if (commentBody.length > MAX_COMMENT_LENGTH) {
+        console.warn(`Generated report exceeds GitHub comment length limit (${commentBody.length}/${MAX_COMMENT_LENGTH}). Truncating...`);
+        const truncationMessage = "\n\n**Note:** レポートが長すぎるため、一部省略されました。";
+        commentBody = commentBody.substring(0, MAX_COMMENT_LENGTH - truncationMessage.length) + truncationMessage;
+    }
+
+    try {
+        console.log(`Posting comment to PR #${issueNumber}...`);
+        await octokit.rest.issues.createComment({
+          owner,
+          repo,
+          issue_number: issueNumber,
+          body: commentBody
+        });
+        console.log('Comment posted successfully.');
+    } catch (error) {
+        console.error(`Failed to post comment: ${error.message}`);
+        // Optionally re-throw or handle specific errors (like 403 permission errors)
+        // Consider just logging the error and letting the action continue?
+    }
+}
+
+
+// --- API Calls ---
+
 async function analyzeDependencies(diff) {
+  const apiKey = core.getInput('perplexity-api-key');
+  if (!apiKey) {
+    console.warn('Perplexity API key not provided. Skipping dependency analysis.');
+    return { dependencies: [], overall_assessment: { recommendation_jp: '判断不可', reasoning_jp: 'APIキー未設定のため分析スキップ' } };
+  }
+
+  console.log('Starting dependency analysis with Perplexity...');
   try {
-    const apiKey = core.getInput('perplexity-api-key');
     const response = await axios.post(PERPLEXITY_API_ENDPOINT, {
-      model: "sonar-pro",
+      model: "sonar-pro", // Or another suitable model
       messages: [
         {
           role: "system",
           content: `
-Analyze the dependency changes in the provided diff for a project. Focus on security implications.
-The diff content is:
-\`\`\`diff
-${diff}
-\`\`\`
+あなたはコードの依存関係変更を分析するセキュリティ専門家です。提供された差分情報を基に、各依存関係の変更（追加、更新、削除）を特定してください。
 
-Identify each dependency change (added, removed, updated). For updates, specify the 'from' and 'to' versions.
-For each changed dependency, provide a detailed security assessment:
-1.  **Version Implications:** Analyze the semantic versioning (major, minor, patch) and its likely impact (breaking changes, new features, bug fixes).
-2.  **Security Findings:**
-    *   Research known CVEs or security advisories associated with BOTH the 'from' and 'to' versions. List relevant CVE IDs.
-    *   Describe the nature of the vulnerabilities (e.g., RCE, XSS, DoS, data exposure) in JAPANESE.
-    *   Identify potentially affected components or functionalities in the application.
-    *   Provide evidence: Link to release notes, security advisories, or relevant code changes if possible.
-3.  **Risk Score (0-10):** Assign a risk score (NUMBER) based on the severity and likelihood of vulnerabilities fixed or introduced. 10 is highest risk.
-4.  **Upgrade Recommendation (Japanese):** State clearly IN JAPANESE whether upgrading is recommended (例: 「強く推奨」、「推奨」、「検討」、「不要」).
-5.  **Recommendations (Japanese):** Suggest specific actions IN JAPANESE (e.g., \"直ちにアップグレード\", \"注意深く監視\", \"徹底的にテスト\"). Mention alternatives if applicable. Note any specific monitoring needed.
+**更新**された依存関係については、以下の情報を日本語で詳しく分析・評価してください：
+1.  **現状バージョン (From) の主なセキュリティリスク:** 現在使用しているバージョンに存在する既知の脆弱性や懸念点を具体的に記述してください。無い場合は「特筆すべき既知のリスクなし」としてください。
+2.  **更新後バージョン (To) の評価:**
+    *   **改善点:** この更新によって解消される主要な脆弱性や問題点を記述してください。
+    *   **潜在的リスク:** 更新後のバージョンで新たに懸念される点（例：既知の脆弱性、大きなAPI変更による互換性問題など）があれば記述してください。無い場合は「特筆すべき潜在的リスクなし」としてください。
+3.  **アップグレード判断と理由:** 上記を踏まえ、アップグレードを「強く推奨」「推奨」「検討」「不要」のいずれかで判断し、**その明確な理由**を簡潔に記述してください。（例：「深刻な脆弱性解消のため強く推奨」「互換性リスクを考慮し要検討」など）
 
-Provide an **Overall Risk Assessment (Japanese):**
-1.  **Overall Risk Score (0-10):** A single score (NUMBER) summarizing the risk of all dependency changes.
-2.  **Risk Level (Japanese):** Categorize the overall risk IN JAPANESE (例: 「低」、「中」、「高」、「緊急」).
-3.  **Summary (Japanese):** Briefly explain the main risks and benefits of the changes IN JAPANESE.
-4.  **Requires Immediate Action (Japanese):** State IN JAPANESE if immediate action is needed (例: 「あり」、「なし」).
-5.  **Merge Recommendation (Japanese):** Recommend IN JAPANESE whether to merge the changes based on the security analysis (例: 「マージ可」、「注意してマージ」、「マージ前に対応必須」).
+**追加**された依存関係については、以下の情報を日本語で分析・評価してください：
+1.  **依存関係の概要と用途:** このライブラリが何をするものか、一般的な用途を簡潔に説明してください。
+2.  **既知のセキュリティリスク:** 追加されるバージョンに既知の脆弱性や一般的なセキュリティ上の懸念（例：メンテナンス状況、過去の脆弱性傾向など）があれば記述してください。無い場合は「特筆すべき既知のリスクなし」としてください。
+3.  **導入判断:** 「導入可」「注意して導入」「導入非推奨」のいずれかで判断し、その理由を簡潔に記述してください。
 
-Respond ONLY with a valid JSON object containing two top-level keys: 'dependencies' (an array of objects, one for each changed dependency) and 'overall_risk_assessment'. Follow this structure precisely. Do not include any markdown formatting or introductory text.
+**削除**された依存関係については、削除による影響（もしあれば）を簡単に記述してください。
 
-JSON Structure:
+**全体評価:**
+*   **総合的なマージ判断 (Japanese):** 全ての変更を考慮し、「マージ可」「注意してマージ」「マージ前に対応必須」のいずれかで判断してください。
+*   **判断理由 (Japanese):** 総合的な判断の根拠となる主要な理由を簡潔に記述してください。
+
+**応答形式:**
+以下のJSON構造に従って、**JSONオブジェクトのみ**を応答してください。Markdownフォーマットや他のテキストは含めないでください。
+
+\`\`\`json
 {
   "dependencies": [
     {
       "name": "string",
-      "change_type": "added|removed|updated",
+      "change_type": "updated",
       "version_change": { "from": "string", "to": "string" },
-      "version_implications": "string",
-      "security_findings": {
-        "severity": "string", "cves": ["string"], "description_jp": "string", "affected_components": ["string"],
-        "evidence": { "release_notes": "string", "implementation_changes": "string", "references": ["string"] }
+      "current_version_risks_jp": "string",
+      "new_version_assessment_jp": {
+        "improvements_jp": "string",
+        "potential_risks_jp": "string"
       },
-      "risk_score": number,
-      "upgrade_recommendation_jp": "string",
-      "recommendations_jp": { "actions": ["string"], "alternatives": ["string"], "additional_monitoring": ["string"] }
+      "upgrade_recommendation_jp": "強く推奨|推奨|検討|不要",
+      "upgrade_reasoning_jp": "string"
+    },
+    {
+      "name": "string",
+      "change_type": "added",
+      "added_version": "string",
+      "description_jp": "string",
+      "known_risks_jp": "string",
+      "adoption_recommendation_jp": "導入可|注意して導入|導入非推奨",
+      "adoption_reasoning_jp": "string"
+    },
+    {
+      "name": "string",
+      "change_type": "removed",
+      "removal_impact_jp": "string"
     }
+    // ... more dependencies
   ],
-  "overall_risk_assessment": {
-    "overall_risk_score": number,
-    "risk_level_jp": "string", "summary_jp": "string", "requires_immediate_action_jp": "string", "merge_recommendation_jp": "string"
+  "overall_assessment": {
+    "recommendation_jp": "マージ可|注意してマージ|マージ前に対応必須",
+    "reasoning_jp": "string"
   }
 }
+\`\`\`
 `
         },
         {
           role: "user",
-          content: `Analyze this dependency change diff for security implications:\n\n${diff}`
+          content: `以下の差分情報について、依存関係の変更を分析してください:\n\n\`\`\`diff\n${diff}\n\`\`\``
         }
       ]
     }, {
@@ -41697,102 +41747,102 @@ JSON Structure:
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json'
-      }
+      },
+      timeout: 180000 // 3 minute timeout
     });
 
-    try {
-      let content = response.data.choices[0].message.content;
-      content = content.replace(/^```json\s*\n|\n```\s*$/g, '').trim();
-      const analysisResult = JSON.parse(content);
+    let content = response.data.choices[0].message.content;
+    content = content.replace(/^```json\s*\n|\n```\s*$/g, '').trim();
+    const analysisResult = JSON.parse(content);
 
-      if (!analysisResult || typeof analysisResult !== 'object' || !analysisResult.dependencies || !Array.isArray(analysisResult.dependencies) || !analysisResult.overall_risk_assessment) {
-        throw new Error('Invalid JSON structure received for dependencies.');
-      }
-
-      // Ensure scores are numbers, defaulting to 0
-      analysisResult.overall_risk_assessment.overall_risk_score = Number(analysisResult.overall_risk_assessment.overall_risk_score) || 0;
-      for (const dep of analysisResult.dependencies) {
-        dep.risk_score = Number(dep.risk_score) || 0;
-      }
-
-      return analysisResult;
-    } catch (parseError) {
-      console.error('依存関係分析のレスポンスパースに失敗:', parseError, 'Raw response:', response.data.choices[0]?.message?.content);
-      // Return default structure on parse error
-      return {
-        dependencies: [],
-        overall_risk_assessment: { overall_risk_score: 0, risk_level_jp: '不明', summary_jp: 'APIレスポンスの解析に失敗しました。', requires_immediate_action_jp: '不明', merge_recommendation_jp: '判断不可' }
-      };
+    // Basic validation of the response structure
+    if (!analysisResult || typeof analysisResult !== 'object' || !analysisResult.dependencies || !Array.isArray(analysisResult.dependencies) || !analysisResult.overall_assessment) {
+      console.error('Invalid JSON structure received from dependency analysis API:', content);
+      throw new Error('依存関係分析APIからの応答形式が無効です。');
     }
-  } catch (apiError) {
-    console.error(`依存関係分析API呼び出し中にエラー: ${apiError.message}`);
-    // Return default structure on API call error
+
+    console.log('Dependency analysis completed successfully.');
+    // Log the raw result for debugging if needed (optional)
+    // console.log('Raw Dependency Analysis Result:', JSON.stringify(analysisResult, null, 2));
+    return analysisResult;
+
+  } catch (error) {
+    console.error(`Error during dependency analysis: ${error.message}`);
+    if (error.response) {
+      console.error('API Error Response:', error.response.data);
+    } else if (error.request) {
+      console.error('API No Response Received');
+    }
+    // Return a default structure indicating failure
     return {
       dependencies: [],
-      overall_risk_assessment: { overall_risk_score: 0, risk_level_jp: '不明', summary_jp: '依存関係分析APIへの接続または処理中にエラーが発生しました。', requires_immediate_action_jp: '不明', merge_recommendation_jp: '判断不可' }
+      overall_assessment: { recommendation_jp: '判断不可', reasoning_jp: `依存関係分析中にエラーが発生しました: ${error.message}` }
     };
   }
 }
 
 async function analyzeVulnerabilities(diff, dependencies) {
+  const apiKey = core.getInput('perplexity-api-key');
+   if (!apiKey) {
+    console.warn('Perplexity API key not provided. Skipping vulnerability analysis.');
+    return { vulnerabilities: [] };
+  }
+
+  // Only include dependency names and versions for context
+  const depContext = dependencies.map(d => ({ name: d.name, from: d.version_change?.from, to: d.version_change?.to || d.added_version }));
+
+  console.log('Starting vulnerability analysis with Perplexity...');
   try {
-    const apiKey = core.getInput('perplexity-api-key');
     const response = await axios.post(PERPLEXITY_API_ENDPOINT, {
-      model: "sonar-pro",
+      model: "sonar-pro", // Or another suitable model
       messages: [
         {
           role: "system",
           content: `
-Analyze the provided code diff for potential security vulnerabilities and assess the security implications of the dependency changes listed.
+あなたはコードと依存関係の変更を分析するセキュリティ専門家です。提供されたコード差分と依存関係の変更リストを基に、潜在的なセキュリティ脆弱性や懸念事項を特定してください。OWASP Top 10などの一般的な脆弱性パターンに注意してください。
 
-Code Diff:
-\`\`\`diff
-${diff}
-\`\`\`
+各脆弱性や懸念事項について、以下の情報を日本語で記述してください：
+1.  **脆弱性/懸念事項の名称:** 例：「SQLインジェクションの可能性」「不適切なエラー処理」など。
+2.  **説明:** 具体的にどのような問題か、どのような影響があるかを説明してください。
+3.  **変更影響:** この問題は、今回のコード/依存関係の変更によって「**導入された**」ものですか、「**解消された**」ものですか、それとも「**変更前から存在し解消されていない**」ものですか？ (\`introduced\` | \`resolved\` | \`persistent\` のいずれかを指定)
+4.  **関連箇所:** 問題が存在するコード箇所（ファイル名、行番号など）、または関連する依存関係名を特定してください。
+5.  **推奨される対策:** 具体的な修正方法や、取るべきアクションを提案してください。
+6.  **重要度:** リスクの度合いを「重大(Critical)」「高(High)」「中(Medium)」「低(Low)」で評価してください。
 
-Dependency Analysis Summary (for context):
+**応答形式:**
+以下のJSON構造に従って、**JSONオブジェクトのみ**を応答してください。Markdownフォーマットや他のテキストは含めないでください。脆弱性が見つからない場合は、空の配列 \`[]\` を含むJSONを返してください。
+
 \`\`\`json
-${JSON.stringify(dependencies, null, 2)}
-\`\`\`
-
-Perform a deep security analysis focusing on:
-1.  **Code Changes Analysis:** Identify security-related code patterns/anti-patterns, check for common vulnerability types (OWASP Top 10), analyze changes in auth/data handling.
-2.  **Dependency Interaction:** Assess how code changes interact with updated dependencies.
-3.  **Vulnerability Assessment:** For each potential vulnerability found:
-    *   Assign **Severity** (critical, high, medium, low).
-    *   Assign **Risk Score (0-10)** (NUMBER).
-    *   Provide detailed **Description** IN JAPANESE.
-    *   Include **Technical Details** (affected code, attack vectors, impact, root cause).
-    *   Provide **Evidence** (code location, PoC ideas, related CVEs).
-    *   Suggest **Mitigation** (recommended fixes, alternatives, best practices) IN JAPANESE.
-4.  **Overall Assessment (Japanese):**
-    *   **Overall Risk Score (0-10)** (NUMBER) combining code and dependency findings.
-    *   **Merge Recommendation (Japanese)** (例: 「マージ可」、「注意してマージ」、「マージ前に対応必須」).
-    *   Provide **Analysis Metadata** (scan coverage, confidence, limitations).
-
-Respond ONLY with a valid JSON object. Do not include markdown formatting.
-
-JSON Structure:
 {
   "vulnerabilities": [
     {
-      "severity": "critical|high|medium|low",
-      "risk_score": number,
-      "type": "string",
+      "name_jp": "string",
       "description_jp": "string",
-      "technical_details": { "affected_code": "string", "attack_vectors": ["string"], "impact_analysis": "string", "root_cause": "string" },
-      "evidence": { "code_location": "string", "proof_of_concept": "string", "related_cves": ["string"] },
-      "mitigation": { "recommended_fix_jp": "string", "alternative_solutions_jp": ["string"], "security_best_practices_jp": ["string"] }
+      "change_impact": "introduced | resolved | persistent",
+      "location": "string (e.g., file.go:123 or dependency_name)",
+      "recommendation_jp": "string",
+      "severity": "Critical | High | Medium | Low"
     }
-  ],
-  "overall_risk_assessment": { "overall_risk_score": number, "merge_recommendation_jp": "string" },
-  "analysis_metadata": { "scan_coverage": ["string"], "confidence_level": "high|medium|low", "limitations": ["string"] }
+    // ... more vulnerabilities
+  ]
 }
+\`\`\`
 `
         },
         {
           role: "user",
-          content: `Analyze this code diff for security vulnerabilities, considering the provided dependency context:\n\n${diff}`
+          content: `以下のコード差分と依存関係の変更を分析し、脆弱性や懸念事項を報告してください。
+
+コード差分:
+\`\`\`diff
+${diff}
+\`\`\`
+
+依存関係の変更 (概要):
+\`\`\`json
+${JSON.stringify(depContext, null, 2)}
+\`\`\`
+`
         }
       ]
     }, {
@@ -41800,58 +41850,100 @@ JSON Structure:
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json'
-      }
+      },
+      timeout: 180000 // 3 minute timeout
     });
 
-    try {
-      let content = response.data.choices[0].message.content;
-      content = content.replace(/^```json\s*\n|\n```\s*$/g, '').trim();
-      const analysisResult = JSON.parse(content);
+    let content = response.data.choices[0].message.content;
+    content = content.replace(/^```json\s*\n|\n```\s*$/g, '').trim();
+    const analysisResult = JSON.parse(content);
 
-      if (!analysisResult || typeof analysisResult !== 'object' || !analysisResult.vulnerabilities || !Array.isArray(analysisResult.vulnerabilities) || !analysisResult.analysis_metadata || !analysisResult.overall_risk_assessment) {
-        throw new Error('Invalid JSON structure received for vulnerabilities.');
-      }
-
-      // Ensure scores are numbers
-      if(analysisResult.overall_risk_assessment) {
-          analysisResult.overall_risk_assessment.overall_risk_score = Number(analysisResult.overall_risk_assessment.overall_risk_score) || 0;
-      }
-      for (const vuln of analysisResult.vulnerabilities) {
-          vuln.risk_score = Number(vuln.risk_score) || 0;
-      }
-
-      return analysisResult;
-    } catch (parseError) {
-      console.error('脆弱性スキャンAPIレスポンスのパースに失敗:', parseError, 'Raw response:', response.data.choices[0]?.message?.content);
-      // Return default structure on parse error
-      return {
-        vulnerabilities: [],
-        overall_risk_assessment: { overall_risk_score: 0, merge_recommendation_jp: '判断不可' },
-        analysis_metadata: { scan_coverage: ['Limited scan due to parse error'], confidence_level: 'low', limitations: ['Failed to parse API response'] }
-      };
+    // Basic validation
+    if (!analysisResult || !Array.isArray(analysisResult.vulnerabilities)) {
+        console.error('Invalid JSON structure received from vulnerability analysis API:', content);
+        throw new Error('脆弱性分析APIからの応答形式が無効です。');
     }
-  } catch (apiError) {
-    console.error(`脆弱性スキャンAPI呼び出し中にエラー: ${apiError.message}`);
-    // Return default structure on API call error
-    return {
-      vulnerabilities: [],
-      overall_risk_assessment: { overall_risk_score: 0, merge_recommendation_jp: '判断不可' },
-      analysis_metadata: { scan_coverage: ['API call failed'], confidence_level: 'low', limitations: ['Error connecting to or processing vulnerability scan API'] }
-    };
+
+    console.log('Vulnerability analysis completed successfully.');
+    // console.log('Raw Vulnerability Analysis Result:', JSON.stringify(analysisResult, null, 2));
+    return analysisResult;
+
+  } catch (error) {
+    console.error(`Error during vulnerability analysis: ${error.message}`);
+     if (error.response) {
+      console.error('API Error Response:', error.response.data);
+    } else if (error.request) {
+      console.error('API No Response Received');
+    }
+    return { vulnerabilities: [] }; // Return empty array on error
   }
 }
 
-// Helper to get severity score (higher number is more severe)
-function getSeverityScore(severity) {
-    const lowerSeverity = severity?.toLowerCase();
-    switch(lowerSeverity) {
-        case 'critical': return 4;
-        case 'high': return 3;
-        case 'medium': return 2;
-        case 'low': return 1;
-        default: return 0;
+async function analyzeCodeDiffWithGemini(codeDiff, dependencyName, versionFrom, versionTo) {
+  const apiKey = core.getInput('gemini-api-key');
+  if (!apiKey) {
+    console.log(`Gemini API key not provided. Skipping code diff analysis for ${dependencyName}.`);
+    return 'Gemini APIキー未設定のためスキップ';
+  }
+  if (!codeDiff || codeDiff.trim() === '') {
+    console.log(`Code diff for ${dependencyName} is empty. Skipping Gemini analysis.`);
+    return 'コード差分が空のためスキップ';
+  }
+
+  const MAX_DIFF_LENGTH = 1000000;
+  if (codeDiff.length > MAX_DIFF_LENGTH) {
+      console.warn(`Code diff for ${dependencyName} is too large (${codeDiff.length} chars). Skipping Gemini analysis.`);
+      return `コード差分長すぎ (${codeDiff.length}文字) のためスキップ`;
+  }
+
+  console.log(`Analyzing code diff for ${dependencyName} (${versionFrom} -> ${versionTo}) with Gemini...`);
+  try {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro-preview-03-25"}); // Use the latest appropriate model
+
+    const generationConfig = {
+      temperature: 0.3, // Slightly higher temp for more descriptive analysis
+      maxOutputTokens: 2048,
+      responseMimeType: "text/plain",
+    };
+
+    const chatSession = model.startChat({ generationConfig });
+
+    // Updated prompt focusing on the 'what' and 'security impact'
+    const prompt = `
+あなたは提出されたコード差分をレビューするセキュリティエンジニアです。以下の ${dependencyName} ライブラリのバージョン ${versionFrom} から ${versionTo} へのコード差分について、静的解析の観点からレビューしてください。
+
+コード差分:
+\`\`\`diff
+${codeDiff}
+\`\`\`
+
+以下の点を日本語で具体的に報告してください：
+1.  **主な変更内容:** この差分は、どのような機能変更、バグ修正、リファクタリング等を行っていますか？ 主要な変更点を簡潔に説明してください。
+2.  **セキュリティへの影響:**
+    *   **改善点:** この変更によって、セキュリティが向上する点（脆弱性の修正、堅牢性の向上など）はありますか？ 具体的に記述してください。
+    *   **潜在的なリスク/懸念:** この変更によって、新たなセキュリティリスクや注意すべき点（例: 新しい依存性の導入、複雑性の増加、検証漏れの可能性）はありますか？ 具体的に記述してください。
+    *   **総合評価:** 変更内容と影響を踏まえ、この差分に対するセキュリティ観点での総合的な評価（例：「明確な改善」「軽微な改善」「影響なし」「要注意」など）を記述してください。
+
+脆弱性が見つからない、またはセキュリティへの影響が特にない場合は、その旨を明確に記述してください。単に「問題なし」とするのではなく、「特定の改善点が確認された」「特筆すべきセキュリティリスクは見当たらない」のように具体的に記述することが望ましいです。
+`;
+
+    const result = await chatSession.sendMessage(prompt);
+    const analysisText = result.response.text();
+    console.log(`Gemini analysis complete for ${dependencyName}.`);
+    return analysisText.trim() || 'Geminiからの応答が空でした。';
+
+  } catch (error) {
+    console.error(`Error analyzing code diff for ${dependencyName} with Gemini: ${error.message}`);
+    if (error.response?.data) {
+        console.error('Gemini API Error Data:', JSON.stringify(error.response.data));
     }
+    return `Gemini APIでの分析中にエラー発生: ${error.message}`;
+  }
 }
+
+
+// --- Git Operations ---
 
 function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), TEMP_DIR_PREFIX));
@@ -41865,46 +41957,61 @@ function cleanupTempDir(dirPath) {
 }
 
 async function getDependencyCodeDiff(dependencyName, versionFrom, versionTo) {
+  if (!versionFrom || !versionTo) {
+      console.warn(`Skipping code diff for ${dependencyName}: Missing 'from' or 'to' version.`);
+      return null;
+  }
   let tempDir = null;
   try {
-    // --- Corrected URL Parsing Logic ---
+    // Corrected URL Parsing Logic
     let repoPath = dependencyName;
     const githubPrefix = 'github.com/';
     if (repoPath.startsWith(githubPrefix)) {
-      repoPath = repoPath.substring(githubPrefix.length); // -> golang-jwt/jwt/v4
+      repoPath = repoPath.substring(githubPrefix.length);
     }
-    // Remove trailing /vN suffix if present (common in Go modules)
     const versionSuffixMatch = repoPath.match(/\/v(\d+)$/);
+    let repoNameOnly = repoPath; // Store the name without version suffix for logging
     if (versionSuffixMatch) {
-      repoPath = repoPath.substring(0, repoPath.length - versionSuffixMatch[0].length); // -> golang-jwt/jwt
+      repoNameOnly = repoPath.substring(0, repoPath.length - versionSuffixMatch[0].length);
+      repoPath = repoNameOnly; // Use the path without suffix for URL
     }
-    // --- End of Corrected Logic ---
+    // End of Corrected Logic
 
-    const repoUrl = `https://github.com/${repoPath}.git`; // -> https://github.com/golang-jwt/jwt.git
+    const repoUrl = `https://github.com/${repoPath}.git`;
     console.log(`Constructed repo URL: ${repoUrl}`);
 
     tempDir = createTempDir();
-    console.log(`Cloning ${repoPath} (branch: ${versionTo}) into ${tempDir}...`); // Log corrected path
+    console.log(`Cloning ${repoNameOnly} (branch: ${versionTo}) into ${tempDir}...`);
 
     // Clone the target version first
-    execSync(`git clone --depth 1 --branch ${versionTo} ${repoUrl} .`, { cwd: tempDir, stdio: 'pipe', encoding: 'utf8', timeout: 480000 });
+    execSync(`git clone --quiet --depth 1 --branch ${versionTo} ${repoUrl} .`, { cwd: tempDir, stdio: 'pipe', encoding: 'utf8', timeout: 480000 });
     console.log(`Clone complete for branch ${versionTo}.`);
 
     // Fetch the specific tag/ref for the 'from' version
     console.log(`Fetching tag ${versionFrom}...`);
-    execSync(`git fetch origin refs/tags/${versionFrom}:refs/tags/${versionFrom} --depth 1 --no-tags`, { cwd: tempDir, stdio: 'pipe', encoding: 'utf8', timeout: 300000 });
-    console.log(`Fetch complete for tag ${versionFrom}.`);
-
-    // Verify the tag exists locally
-    console.log('Verifying local tags...'); // Use single quotes
-    const tagsOutput = execSync('git tag -l', { cwd: tempDir, encoding: 'utf8' }); // Use single quotes
-    console.log(`Local tags found:\n${tagsOutput}`);
-    if (!tagsOutput.split('\n').includes(versionFrom)) {
-        console.warn(`Tag ${versionFrom} not found locally after fetch!`);
-        // Potentially add fallback logic here if needed
+    // Use a try-catch specifically for fetch as tags might not always exist perfectly
+    try {
+        execSync(`git fetch --quiet origin refs/tags/${versionFrom}:refs/tags/${versionFrom} --depth 1 --no-tags`, { cwd: tempDir, stdio: 'pipe', encoding: 'utf8', timeout: 300000 });
+        console.log(`Fetch complete for tag ${versionFrom}.`);
+    } catch (fetchError) {
+        console.warn(`Failed to fetch exact tag ref 'refs/tags/${versionFrom}'. Trying fetch by tag name only...`);
+        console.warn(`Fetch error details: ${fetchError.message}`);
+        // Fallback: try fetching just the tag name. Might fetch more history but could work.
+        execSync(`git fetch --quiet origin tag ${versionFrom} --depth 1 --no-tags`, { cwd: tempDir, stdio: 'pipe', encoding: 'utf8', timeout: 300000 });
+        console.log(`Fallback fetch potentially completed for tag ${versionFrom}.`);
     }
 
-    console.log(`Calculating diff between tags/${versionFrom} and HEAD (${versionTo}) for ${repoPath}...`); // Log corrected path
+    // Verify the tag exists locally before diffing
+    console.log('Verifying local tags...');
+    const tagsOutput = execSync('git tag -l', { cwd: tempDir, encoding: 'utf8' });
+    if (!tagsOutput.split('\n').includes(versionFrom)) {
+        console.error(`Tag ${versionFrom} still not found locally after fetch attempts for ${repoNameOnly}. Cannot calculate diff.`);
+        cleanupTempDir(tempDir);
+        return null; // Cannot proceed without the tag
+    }
+     console.log(`Tag ${versionFrom} confirmed locally.`);
+
+    console.log(`Calculating diff between tags/${versionFrom} and HEAD (${versionTo}) for ${repoNameOnly}...`);
     const diffOutput = execSync(`git diff tags/${versionFrom} HEAD`, { cwd: tempDir, encoding: 'utf8', maxBuffer: 75 * 1024 * 1024, timeout: 300000 });
     console.log(`Diff calculation successful. Diff length: ${diffOutput.length}`);
 
@@ -41913,379 +42020,185 @@ async function getDependencyCodeDiff(dependencyName, versionFrom, versionTo) {
 
   } catch (error) {
     console.error(`Error during getDependencyCodeDiff for ${dependencyName} (${versionFrom}..${versionTo}): ${error.message}`);
-    if (error.stdout) {
-      console.error(`stdout:\n${error.stdout.toString().slice(0, 1000)}...`);
-    }
-    if (error.stderr) {
-      console.error(`stderr:\n${error.stderr.toString().slice(0, 1000)}...`);
-    }
-    if (error.status !== null) {
-         console.error(`Command exited with status ${error.status}`);
-    }
+    if (error.stdout) console.error(`stdout:\n${error.stdout.toString().slice(0, 500)}...`);
+    if (error.stderr) console.error(`stderr:\n${error.stderr.toString().slice(0, 500)}...`);
+    if (error.status !== null) console.error(`Command exited with status ${error.status}`);
     cleanupTempDir(tempDir);
     return null;
   }
 }
 
-/**
- * Analyzes a code diff using the Gemini API.
- */
-async function analyzeCodeDiffWithGemini(codeDiff, dependencyName) {
-  const apiKey = core.getInput('gemini-api-key');
-  if (!apiKey) {
-    console.log('Gemini API key not provided, skipping code diff analysis.');
-    return 'Gemini APIキーが提供されていないため、コード差分分析はスキップされました。';
-  }
-  if (!codeDiff || codeDiff.trim() === '') {
-      return 'コード差分が空のため、分析は行われませんでした。';
-  }
 
-  // Limit diff size to avoid excessive API usage/costs (e.g., ~1 million chars)
-  const MAX_DIFF_LENGTH = 1000000; 
-  if (codeDiff.length > MAX_DIFF_LENGTH) {
-      console.warn(`Code diff for ${dependencyName} is too large (${codeDiff.length} chars), skipping Gemini analysis.`);
-      return `コード差分が大きすぎるため、Geminiによる詳細分析はスキップされました (${codeDiff.length}文字)。`;
-  }
+// --- Report Generation ---
 
-  try {
-    console.log(`Analyzing code diff for ${dependencyName} with Gemini...`);
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro-preview-03-25"}); // Or another suitable model
-
-    const generationConfig = {
-      temperature: 0.2, // Lower temperature for more deterministic analysis
-      // topP: 0.95, 
-      // topK: 64, 
-      maxOutputTokens: 4096, 
-      responseMimeType: "text/plain",
-    };
-
-    const chatSession = model.startChat({ generationConfig });
-
-    const prompt = `以下のコード差分について、静的解析の観点から潜在的なセキュリティ脆弱性を特定し、日本語で指摘してください。脆弱性が見つからない場合は「特に懸念される脆弱性は検出されませんでした。」と報告してください。\\n\\n対象ライブラリ: ${dependencyName}\\n\\nコード差分:\\n\`\`\`diff\\n${codeDiff}\\n\`\`\`\\n\\n分析結果:`;
-
-    const result = await chatSession.sendMessage(prompt);
-    const analysisText = result.response.text();
-    console.log(`Gemini analysis complete for ${dependencyName}.`);
-    return analysisText || 'Geminiからの応答が空でした。';
-
-  } catch (error) {
-    console.error(`Error analyzing code diff for ${dependencyName} with Gemini: ${error.message}`);
-    if (error.response?.data) {
-        console.error('Gemini API Error Data:', error.response.data);
+// Helper to get severity score (higher number is more severe)
+function getSeverityScore(severity) {
+    const lowerSeverity = severity?.toLowerCase();
+    switch(lowerSeverity) {
+        case 'critical': return 4;
+        case 'high': return 3;
+        case 'medium': return 2;
+        case 'low': return 1;
+        default: return 0;
     }
-    return `Gemini APIでのコード差分分析中にエラーが発生しました: ${error.message}`;
-  }
 }
 
-// Function to generate the security report in the new format
-function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDiffAnalyses, severityLevel) {
-  let securityReport = '';
-  let finalOverallRiskScore = 0;
-  let finalMergeRecommendation = '判断不可';
-  const topRecommendations = [];
 
-  // --- 1. Process Data & Calculate Overall Scores ---
+function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDiffAnalyses) {
+  let report = '## セキュリティ分析レポート\n\n';
 
-  // Dependency Analysis Data
-  const depOverallRisk = dependencyAnalysis?.overall_risk_assessment;
-  const depOverallScore = depOverallRisk?.overall_risk_score ?? 0;
-  const depMergeRec = depOverallRisk?.merge_recommendation_jp ?? '判断不可';
-  const depImmediateAction = depOverallRisk?.requires_immediate_action_jp === 'あり';
+  // --- 1. Overall Assessment ---
+  const overall = dependencyAnalysis.overall_assessment;
+  report += `**総合評価:** ${overall.recommendation_jp || '判断不可'}\n`;
+  report += `**理由:** ${overall.reasoning_jp || 'N/A'}\n\n`;
+  report += '---\n\n';
 
-  // Extract top recommendations from dependencies
-  if (dependencyAnalysis?.dependencies) {
-      for (const dep of dependencyAnalysis.dependencies) {
-          const actions = dep.recommendations_jp?.actions;
-          if (actions && actions.length > 0) {
-               const depRiskScore = dep.risk_score ?? 0;
-               if (depRiskScore >= 7 || getSeverityScore(dep.security_findings?.severity) >= getSeverityScore('high')) {
-                   topRecommendations.push(`**[依存関係] ${dep.name}:** ${actions[0]}`);
-               }
-          }
-      }
-  }
-  if (depImmediateAction && !topRecommendations.some(rec => rec.includes('即時対応'))) {
-      topRecommendations.unshift('**[依存関係]** 分析結果に基づき、**即時対応が必要**です。');
-  }
-
-  // Vulnerability Analysis Data
-  const vulnOverallRisk = vulnerabilityResults?.overall_risk_assessment;
-  const vulnOverallScore = vulnOverallRisk?.overall_risk_score ?? 0;
-  const vulnMergeRec = vulnOverallRisk?.merge_recommendation_jp ?? '判断不可';
-  let highSeverityVulnsExist = false;
-
-  // Extract top recommendations from vulnerabilities
-  if (vulnerabilityResults?.vulnerabilities && vulnerabilityResults.vulnerabilities.length > 0) {
-      for (const vuln of vulnerabilityResults.vulnerabilities) {
-          const vulnRiskScore = vuln.risk_score ?? 0;
-          const severityScore = getSeverityScore(vuln.severity);
-          if (severityScore >= getSeverityScore('high')) {
-              highSeverityVulnsExist = true;
-          }
-          if (vuln.mitigation?.recommended_fix_jp) {
-              if (vulnRiskScore >= 7 || severityScore >= getSeverityScore('high')) {
-                 topRecommendations.push(`**[脆弱性] ${vuln.type || '不明'}:** ${vuln.mitigation.recommended_fix_jp}`);
-              }
-          }
-      }
-  }
-
-  // Determine Final Overall Score and Merge Recommendation
-  finalOverallRiskScore = Math.max(depOverallScore, vulnOverallScore);
-
-  // Prioritize stricter merge recommendations
-  const mergeOrder = ['マージ前に対応必須', '注意してマージ', 'マージ可', '判断不可'];
-  const depRecIndex = mergeOrder.indexOf(depMergeRec);
-  const vulnRecIndex = mergeOrder.indexOf(vulnMergeRec);
-
-  // Choose the stricter recommendation (lower index in mergeOrder)
-  if (depRecIndex !== -1 && vulnRecIndex !== -1) {
-      finalMergeRecommendation = mergeOrder[Math.min(depRecIndex, vulnRecIndex)];
-  } else if (depRecIndex !== -1) { // Only dep recommendation is valid
-      finalMergeRecommendation = depMergeRec;
-  } else if (vulnRecIndex !== -1) { // Only vuln recommendation is valid
-      finalMergeRecommendation = vulnMergeRec;
-  }
-  // Override: If high severity vulns exist, recommendation should be at least '注意してマージ'
-  if (highSeverityVulnsExist) {
-      const currentRecIndex = mergeOrder.indexOf(finalMergeRecommendation);
-      const cautionIndex = mergeOrder.indexOf('注意してマージ');
-      if (currentRecIndex > cautionIndex) { // If current is 'マージ可' or '判断不可'
-          finalMergeRecommendation = '注意してマージ';
-      }
-  }
-
-
-  // --- 2. Build the Report String ---
-
-  // Report Summary
-  securityReport += '## セキュリティ分析レポート (概要)\n\n';
-  securityReport += `**危険度 (総合):** ${finalOverallRiskScore} / 10 点\n`;
-  securityReport += `**マージ判断:** ${finalMergeRecommendation}\n`;
-
-  if (topRecommendations.length > 0) {
-      securityReport += '**推奨アクション (上位抜粋):**\n';
-      // Sort recommendations: Immediate action first, then by type
-      topRecommendations.sort((a, b) => {
-          if (a.includes('即時対応')) return -1;
-          if (b.includes('即時対応')) return 1;
-          if (a.startsWith('**[依存関係]') && !b.startsWith('**[依存関係]')) return -1;
-          if (!a.startsWith('**[依存関係]') && b.startsWith('**[依存関係]')) return 1;
-          return 0;
-      });
-      for (const rec of topRecommendations.slice(0, 5)) {
-          securityReport += `- ${rec}\n`;
-      }
-  }
-  securityReport += '\n---\n\n';
-
-  // Detailed Dependency Analysis
-  securityReport += '## 変更された依存関係の詳細\n\n';
-  if (dependencyAnalysis?.dependencies && dependencyAnalysis.dependencies.length > 0) {
+  // --- 2. Dependency Changes ---
+  report += '## 依存関係の変更詳細\n\n';
+  if (!dependencyAnalysis.dependencies || dependencyAnalysis.dependencies.length === 0) {
+    report += '分析対象の依存関係の変更はありませんでした。\n';
+  } else {
     for (const dep of dependencyAnalysis.dependencies) {
-      securityReport += `### ${dep.name}\n`;
+      report += `### ${dep.name}\n`;
+
       if (dep.change_type === 'updated') {
-        securityReport += `*   **バージョン変更:** \`${dep.version_change?.from}\` → \`${dep.version_change?.to}\`\n`;
-      } else {
-         securityReport += `*   **変更タイプ:** ${dep.change_type}\n`;
-         if(dep.change_type === 'added' && dep.version_change?.to) {
-            securityReport += `*   **追加バージョン:** \`${dep.version_change.to}\`\n`;
-         }
-      }
-      const depRiskScoreText = dep.risk_score !== undefined ? `${dep.risk_score} / 10 点` : 'N/A';
-      securityReport += `*   **危険度:** ${depRiskScoreText}\n`;
-      if (dep.security_findings) {
-            const findings = dep.security_findings;
-            securityReport += `*   **主な変更/修正点 (重要度: ${findings.severity || '不明'}):**\n`;
-            securityReport += `    *   ${findings.description_jp || findings.description || '詳細不明'}\n`; // Fallback to english description if jp missing
-            if (findings.cves && findings.cves.length > 0) {
-                 securityReport += `    *   関連CVE/アドバイザリ: ${findings.cves.join(', ')}\n`;
-            }
-      }
-      securityReport += `*   **バージョンアップ推奨度:** ${dep.upgrade_recommendation_jp || '情報なし'}\n`;
-      if (dep.recommendations_jp) {
-           securityReport += '*   **推奨アクション/考慮事項:**\n'; // Use single quotes
-           if(dep.recommendations_jp.actions && dep.recommendations_jp.actions.length > 0) {
-                securityReport += `    *   アクション: ${dep.recommendations_jp.actions.join(', ')}\n`;
-           }
-           if(dep.recommendations_jp.additional_monitoring && dep.recommendations_jp.additional_monitoring.length > 0) {
-                 securityReport += `    *   追加モニタリング: ${dep.recommendations_jp.additional_monitoring.join(', ')}\n`;
-           }
-           if(dep.recommendations_jp.alternatives && dep.recommendations_jp.alternatives.length > 0) {
-                 securityReport += `    *   代替案: ${dep.recommendations_jp.alternatives.join(', ')}\n`;
-           }
-      }
-      // *** Add Code Diff Analysis Result ***
-      if (codeDiffAnalyses?.[dep.name]) { // Optional chaining fixed
-          securityReport += '*   **コード差分セキュリティ分析 (Gemini):**\n'; // Use single quotes
-          // Format the Gemini response nicely (e.g., indent, use code blocks if needed)
-          const geminiResult = codeDiffAnalyses[dep.name].split('\n').map(line => `    > ${line}`).join('\n');
-          securityReport += `${geminiResult}\n`;
-      }
-      securityReport += '\n';
-    }
-  } else {
-      securityReport += '変更された依存関係はありませんでした。\n';
-  }
-  securityReport += '\n---\n\n';
-
-  // Detailed Vulnerability Analysis
-  securityReport += '## 検出された脆弱性・懸念事項\n\n';
-  if (vulnerabilityResults?.vulnerabilities && vulnerabilityResults.vulnerabilities.length > 0) {
-        for (const vuln of vulnerabilityResults.vulnerabilities) {
-            const vulnRiskScoreText = vuln.risk_score !== undefined ? `${vuln.risk_score} / 10 点` : 'N/A';
-            securityReport += `### ${vuln.type || '未分類の問題'}\n`; // Removed index
-            securityReport += `*   **危険度:** ${vulnRiskScoreText} (重要度: ${vuln.severity || 'N/A'})\n`; // Changed label and fixed newline
-            securityReport += `*   **説明:** ${vuln.description_jp || vuln.description || '詳細なし'}\n`; // Fallback to english
-             if (vuln.mitigation) {
-                 securityReport += `*   **推奨される対策:** ${vuln.mitigation.recommended_fix_jp || '情報なし'}\n`;
-                 if (vuln.mitigation.security_best_practices_jp && vuln.mitigation.security_best_practices_jp.length > 0) {
-                     securityReport += `    *   ベストプラクティス: ${vuln.mitigation.security_best_practices_jp.join(', ')}\n`;
-                 }
-                 if (vuln.mitigation.alternative_solutions_jp && vuln.mitigation.alternative_solutions_jp.length > 0) {
-                     securityReport += `    *   代替ソリューション: ${vuln.mitigation.alternative_solutions_jp.join(', ')}\n`;
-                 }
-             }
-             if (vuln.evidence?.code_location) {
-                 securityReport += `*   コード箇所: ${vuln.evidence.code_location}\n`;
-             }
-            securityReport += '\n';
+        report += `*   **変更:** バージョンアップ (\`${dep.version_change?.from}\` → \`${dep.version_change?.to}\`)\n`;
+        report += `*   **現状 (${dep.version_change?.from}) のリスク:** ${dep.current_version_risks_jp || '情報なし'}\n`;
+        if (dep.new_version_assessment_jp) {
+            report += `*   **更新後 (${dep.version_change?.to}) の評価:**\n`;
+            report += `    *   改善点: ${dep.new_version_assessment_jp.improvements_jp || '特になし'}\n`;
+            report += `    *   潜在的リスク: ${dep.new_version_assessment_jp.potential_risks_jp || '特になし'}\n`;
         }
+        report += `*   **アップグレード判断:** ${dep.upgrade_recommendation_jp || '判断不可'} - **理由:** ${dep.upgrade_reasoning_jp || 'N/A'}\n`;
+        // Code Diff Analysis
+        if (codeDiffAnalyses?.[dep.name]) {
+            report += `*   **コード差分分析 (Gemini):**\n\`\`\`\n${codeDiffAnalyses[dep.name]}\n\`\`\`\n`;
+        } else {
+            report += `*   **コード差分分析 (Gemini):** スキップまたは失敗\n`;
+        }
+
+      } else if (dep.change_type === 'added') {
+        report += `*   **変更:** 追加 (\`${dep.added_version}\`)\n`;
+        report += `*   **概要:** ${dep.description_jp || '情報なし'}\n`;
+        report += `*   **既知のリスク:** ${dep.known_risks_jp || '情報なし'}\n`;
+        report += `*   **導入判断:** ${dep.adoption_recommendation_jp || '判断不可'} - **理由:** ${dep.adoption_reasoning_jp || 'N/A'}\n`;
+
+      } else if (dep.change_type === 'removed') {
+        report += `*   **変更:** 削除\n`;
+        report += `*   **影響:** ${dep.removal_impact_jp || '影響の情報なし'}\n`;
+      }
+      report += '\n'; // Add space between dependencies
+    }
+  }
+  report += '---\n\n';
+
+  // --- 3. Vulnerabilities Found ---
+  report += '## 検出された脆弱性・懸念事項\n\n';
+  if (!vulnerabilityResults.vulnerabilities || vulnerabilityResults.vulnerabilities.length === 0) {
+    report += '今回の変更に関連する新たな脆弱性や懸念事項は検出されませんでした。\n';
   } else {
-        securityReport += '検出された脆弱性・懸念事項はありませんでした。\n';
-  }
-  securityReport += '\n---\n\n';
-
-  // Metadata
-  securityReport += '**分析メタデータ (参考)**\n';
-  const meta = vulnerabilityResults?.analysis_metadata || dependencyAnalysis?.analysis_metadata; // Use vuln metadata if available
-  if (meta) {
-        securityReport += `*   **スキャン範囲:** ${meta.scan_coverage ? meta.scan_coverage.join(', ') : '不明'}\n`;
-        securityReport += `*   **信頼度:** ${meta.confidence_level || '不明'}\n`;
-        securityReport += `*   **制限事項:** ${meta.limitations ? meta.limitations.join(', ') : 'なし'}\n`;
-  } else {
-        securityReport += '*   メタデータは利用できませんでした。\n';
+    for (const vuln of vulnerabilityResults.vulnerabilities) {
+      report += `### ${vuln.name_jp || '名称不明の問題'}\n`;
+      report += `*   **重要度:** ${vuln.severity || '不明'}\n`;
+      report += `*   **変更影響:** ${vuln.change_impact || '不明'}\n`; // introduced, resolved, persistent
+      report += `*   **関連箇所:** ${vuln.location || '不明'}\n`;
+      report += `*   **説明:** ${vuln.description_jp || '詳細なし'}\n`;
+      report += `*   **推奨対策:** ${vuln.recommendation_jp || '情報なし'}\n\n`;
+    }
   }
 
-  // --- 3. Set Action Outputs & Issue Warning/Error ---
-  console.log(`レポート生成完了。危険度 (総合): ${finalOverallRiskScore}, マージ判断: ${finalMergeRecommendation}`);
-
-  // Set action output
-  core.setOutput('analysis_report', securityReport);
-  core.setOutput('overall_risk_score', finalOverallRiskScore);
-  core.setOutput('merge_recommendation', finalMergeRecommendation);
-
-  // Issue Warning or Error instead of Failing the step
-  const reportSummary = `危険度 (総合): ${finalOverallRiskScore}/10。マージ判断: ${finalMergeRecommendation}。詳細はレポートを確認してください。`;
-
-  if (finalMergeRecommendation === 'マージ前に対応必須' || finalOverallRiskScore >= 8) {
-      core.error(`重要度の高いセキュリティリスクが検出されました。${reportSummary}`);
-  } else if (finalMergeRecommendation === '注意してマージ' || finalOverallRiskScore >= 5) {
-      core.warning(`注意が必要なセキュリティリスクが検出されました。${reportSummary}`);
-  }
-
-  return securityReport; // Return the generated report string
+  console.log('Security report generation complete.');
+  // console.log('Generated Report:\n', report); // For debugging
+  return report;
 }
+
+
+// --- Main Execution Logic ---
 
 async function run() {
   try {
-    // 入力パラメータを取得
-    const severityLevel = core.getInput('severity-level');
-    const token = core.getInput('github-token');
+    const token = core.getInput('github-token', { required: true });
+    // severityLevel is no longer directly used for failure, but keep for potential future use?
+    // const severityLevel = core.getInput('severity-level');
 
-    // GitHub APIクライアントを初期化
     const octokit = github.getOctokit(token);
     const context = github.context;
 
-    // PRの場合のみ実行
-    if (context.eventName === 'pull_request') {
-      const pullRequest = context.payload.pull_request;
-      if (!pullRequest) {
-          core.setFailed('Pull request contextが見つかりません。');
-          return;
-      }
-      const codeDiffAnalyses = {}; // Store results, use const as it's not reassigned
+    if (context.eventName !== 'pull_request') {
+      console.log(`Not a pull request event (${context.eventName}). Skipping scan.`);
+      core.setOutput('status', 'skipped');
+      return;
+    }
 
-      try {
-        // PR差分を取得
-        const diff = await getDiffContent(
-          octokit,
-          context.repo.owner,
-          context.repo.repo,
-          pullRequest.number
-        );
-        console.log('PR差分の取得完了');
+    const pullRequest = context.payload.pull_request;
+    if (!pullRequest) {
+      core.setFailed('Pull request context not found.');
+      return;
+    }
+    const issueNumber = pullRequest.number;
+    const owner = context.repo.owner;
+    const repo = context.repo.repo;
 
-        // 依存関係の分析
-        const dependencyAnalysis = await analyzeDependencies(diff);
-        console.log('依存関係の分析結果 (生):', JSON.stringify(dependencyAnalysis, null, 2));
+    console.log(`Starting security scan for PR #${issueNumber} in ${owner}/${repo}`);
 
-        // *** Analyze Code Diffs for Updated Dependencies ***
-        if (dependencyAnalysis?.dependencies) {
-          for (const dep of dependencyAnalysis.dependencies) {
-            if (dep.change_type === 'updated' && dep.version_change?.from && dep.version_change?.to) {
-              console.log(`\nFetching code diff for ${dep.name}...`);
-              // 1. コード差分を取得
-              const codeDiff = await getDependencyCodeDiff(dep.name, dep.version_change.from, dep.version_change.to);
-              if (codeDiff) {
-                // 2. Geminiで分析
-                const analysisResult = await analyzeCodeDiffWithGemini(codeDiff, dep.name);
-                codeDiffAnalyses[dep.name] = analysisResult; // 結果を格納
-              } else {
-                codeDiffAnalyses[dep.name] = 'コード差分の取得または分析に失敗しました。';
-              }
-            }
+    // 1. Get PR Diff
+    const diff = await getDiffContent(octokit, owner, repo, issueNumber);
+    if (!diff) return; // Error handled in getDiffContent
+
+    // 2. Analyze Dependencies (using Perplexity)
+    const dependencyAnalysis = await analyzeDependencies(diff);
+
+    // 3. Analyze Vulnerabilities (using Perplexity, with dep context)
+    const vulnerabilityResults = await analyzeVulnerabilities(diff, dependencyAnalysis.dependencies);
+
+    // 4. Analyze Code Diffs for Updated Dependencies (using Gemini)
+    const codeDiffAnalyses = {};
+    if (dependencyAnalysis?.dependencies) {
+      for (const dep of dependencyAnalysis.dependencies) {
+        if (dep.change_type === 'updated') {
+          const codeDiff = await getDependencyCodeDiff(dep.name, dep.version_change?.from, dep.version_change?.to);
+          if (codeDiff) {
+            codeDiffAnalyses[dep.name] = await analyzeCodeDiffWithGemini(codeDiff, dep.name, dep.version_change?.from, dep.version_change?.to);
+          } else {
+             codeDiffAnalyses[dep.name] = 'コード差分の取得失敗'; // Mark as failed if diff couldn't be obtained
           }
         }
-        // ****************************************************
-
-        const vulnerabilityResults = await analyzeVulnerabilities(diff, dependencyAnalysis?.dependencies || []);
-        console.log('脆弱性スキャン結果 (生):', JSON.stringify(vulnerabilityResults, null, 2));
-
-        // レポート生成
-        const securityReport = generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDiffAnalyses, severityLevel);
-        console.log('\n--- 生成されたセキュリティレポート ---');
-        console.log(securityReport);
-        console.log('--- レポートここまで ---');
-
-        // コメントとして結果を投稿
-        console.log('GitHub PRにコメントを投稿します...');
-        await octokit.rest.issues.createComment({
-          owner: context.repo.owner,
-          repo: context.repo.repo,
-          issue_number: pullRequest.number,
-          body: securityReport
-        });
-        console.log('コメント投稿完了。');
-
-        // Check if the action is running in GitHub Actions environment
-        // No need to check for failure state anymore
-        if (process.env.GITHUB_ACTIONS === 'true') {
-             core.notice('スキャン完了。詳細はPRコメントを確認してください。');
-        }
-
-      } catch (error) {
-        console.error('スキャンまたはレポート生成中にエラーが発生しました:', error);
-        // Try to post a failure comment if possible
-        try {
-            await octokit.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request?.number || 0, // Use optional chaining and fallback
-              body: `セキュリティスキャンの実行中にエラーが発生しました。\n\n\`\`\`\n${error.message}\n\`\`\`\n詳細はActionsのログを確認してください。`
-            });
-        } catch (commentError) {
-            console.error('失敗コメントの投稿中にエラー:', commentError);
-        }
-        core.setFailed(`スキャン実行中にエラーが発生しました: ${error.message}`);
       }
-    } else {
-      console.log(`現在のイベントタイプ: ${context.eventName} (PRイベントではありません)。スキャンをスキップします。`);
-      core.setOutput('status', 'skipped');
     }
+
+    // 5. Generate Report
+    const securityReport = generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDiffAnalyses);
+
+    // 6. Post Report as Comment
+    await postComment(octokit, owner, repo, issueNumber, securityReport);
+
+    // 7. Set Outputs and Warnings/Errors based on Overall Assessment
+    const overallRecommendation = dependencyAnalysis.overall_assessment?.recommendation_jp || '判断不可';
+    core.setOutput('overall_recommendation', overallRecommendation);
+    core.setOutput('analysis_report', securityReport); // Output full report
+
+    if (overallRecommendation === 'マージ前に対応必須') {
+        core.error(`セキュリティレビューが必要です。総合評価: ${overallRecommendation}。理由: ${dependencyAnalysis.overall_assessment?.reasoning_jp || 'N/A'}`);
+    } else if (overallRecommendation === '注意してマージ') {
+        core.warning(`セキュリティ上の注意点があります。総合評価: ${overallRecommendation}。理由: ${dependencyAnalysis.overall_assessment?.reasoning_jp || 'N/A'}`);
+    } else {
+        core.notice(`スキャン完了。総合評価: ${overallRecommendation}。詳細はPRコメントを確認してください。`);
+    }
+
   } catch (error) {
-    core.setFailed(`アクションの初期化または実行中に致命的なエラーが発生しました: ${error.message}`);
+    core.setFailed(`アクション実行中に予期せぬエラーが発生しました: ${error.message}\n${error.stack}`);
+    // Attempt to post a failure comment (best effort)
+     try {
+        const token = core.getInput('github-token');
+        const octokit = github.getOctokit(token);
+        const context = github.context;
+        if (context.payload.pull_request) {
+            await postComment(octokit, context.repo.owner, context.repo.repo, context.payload.pull_request.number,
+             `セキュリティスキャン中にエラーが発生しました。\n\n\`\`\`\n${error.message}\n\`\`\`\n詳細はActionsのログを確認してください。`);
+        }
+     } catch (commentError) {
+         console.error('失敗コメントの投稿中にさらにエラー:', commentError);
+     }
   }
 }
 
