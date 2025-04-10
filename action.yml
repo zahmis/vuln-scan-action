@@ -18,6 +18,9 @@ inputs:
   perplexity-api-key:
     description: 'Perplexity Sonar API key'
     required: true
+  gemini-api-key:
+    description: 'Gemini API key'
+    required: true
 
 outputs:
   result:

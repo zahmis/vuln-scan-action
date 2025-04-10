@@ -1,9 +1,15 @@
 const core = require('@actions/core');
 const github = require('@actions/github');
 const axios = require('axios');
+const fs = require('node:fs');
+const path = require('node:path');
+const { execSync } = require('node:child_process');
+const os = require('node:os');
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 // Perplexity APIのエンドポイント
 const PERPLEXITY_API_ENDPOINT = 'https://api.perplexity.ai/chat/completions';
+const TEMP_DIR_PREFIX = 'dep-clone-';
 
 async function getDiffContent(octokit, owner, repo, pullNumber) {
   try {
@@ -105,9 +111,9 @@ JSON Structure:
 
       // Ensure scores are numbers, defaulting to 0
       analysisResult.overall_risk_assessment.overall_risk_score = Number(analysisResult.overall_risk_assessment.overall_risk_score) || 0;
-      analysisResult.dependencies.forEach(dep => {
+      for (const dep of analysisResult.dependencies) {
         dep.risk_score = Number(dep.risk_score) || 0;
-      });
+      }
 
       return analysisResult;
     } catch (parseError) {
@@ -210,9 +216,9 @@ JSON Structure:
       if(analysisResult.overall_risk_assessment) {
           analysisResult.overall_risk_assessment.overall_risk_score = Number(analysisResult.overall_risk_assessment.overall_risk_score) || 0;
       }
-      analysisResult.vulnerabilities.forEach(vuln => {
+      for (const vuln of analysisResult.vulnerabilities) {
           vuln.risk_score = Number(vuln.risk_score) || 0;
-      });
+      }
 
       return analysisResult;
     } catch (parseError) {
@@ -247,33 +253,136 @@ function getSeverityScore(severity) {
     }
 }
 
-// Function to generate the security report in the new format
-function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, severityLevel) {
+// --- New Functions for Code Diff Analysis ---
+
+/**
+ * Creates a temporary directory for cloning.
+ */
+function createTempDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), TEMP_DIR_PREFIX));
+}
+
+/**
+ * Removes the temporary directory.
+ */
+function cleanupTempDir(dirPath) {
+  if (dirPath && fs.existsSync(dirPath)) {
+    fs.rmSync(dirPath, { recursive: true, force: true });
+    console.log(`Cleaned up temporary directory: ${dirPath}`);
+  }
+}
+
+/**
+ * Gets the code diff between two tags/versions for a given dependency repo.
+ * Uses local git commands after cloning.
+ */
+async function getDependencyCodeDiff(dependencyName, versionFrom, versionTo) {
+  let tempDir = null;
+  try {
+    // Assuming dependency name maps to github.com/owner/repo
+    const repoUrl = `https://github.com/${dependencyName}.git`;
+    tempDir = createTempDir();
+    console.log(`Cloning ${dependencyName} into ${tempDir}...`);
+    
+    // Use execSync for local git commands
+    execSync(`git clone --depth 1 --branch ${versionTo} ${repoUrl} .`, { cwd: tempDir, stdio: 'inherit' });
+    // Fetch the specific tag for the 'from' version
+    execSync(`git fetch origin refs/tags/${versionFrom}:refs/tags/${versionFrom} --depth 1`, { cwd: tempDir, stdio: 'inherit' });
+
+    console.log(`Calculating diff between ${versionFrom} and ${versionTo} for ${dependencyName}...`);
+    const diffOutput = execSync(`git diff ${versionFrom} ${versionTo}`, { cwd: tempDir, encoding: 'utf8', maxBuffer: 50 * 1024 * 1024 }); // 50MB buffer
+
+    cleanupTempDir(tempDir);
+    return diffOutput;
+
+  } catch (error) {
+    console.error(`Error getting code diff for ${dependencyName} (${versionFrom}..${versionTo}): ${error.message}`);
+    if (error.stderr) {
+        console.error(`Git stderr: ${error.stderr.toString()}`);
+    }
+    cleanupTempDir(tempDir); // Ensure cleanup even on error
+    return null; // Indicate diff could not be obtained
+  }
+}
+
+/**
+ * Analyzes a code diff using the Gemini API.
+ */
+async function analyzeCodeDiffWithGemini(codeDiff, dependencyName) {
+  const apiKey = core.getInput('gemini-api-key');
+  if (!apiKey) {
+    console.log('Gemini API key not provided, skipping code diff analysis.');
+    return 'Gemini APIキーが提供されていないため、コード差分分析はスキップされました。';
+  }
+  if (!codeDiff || codeDiff.trim() === '') {
+      return 'コード差分が空のため、分析は行われませんでした。';
+  }
+
+  // Limit diff size to avoid excessive API usage/costs (e.g., ~1 million chars)
+  const MAX_DIFF_LENGTH = 1000000; 
+  if (codeDiff.length > MAX_DIFF_LENGTH) {
+      console.warn(`Code diff for ${dependencyName} is too large (${codeDiff.length} chars), skipping Gemini analysis.`);
+      return `コード差分が大きすぎるため、Geminiによる詳細分析はスキップされました (${codeDiff.length}文字)。`;
+  }
+
+  try {
+    console.log(`Analyzing code diff for ${dependencyName} with Gemini...`);
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro-preview-03-25"}); // Or another suitable model
+
+    const generationConfig = {
+      temperature: 0.2, // Lower temperature for more deterministic analysis
+      // topP: 0.95, 
+      // topK: 64, 
+      maxOutputTokens: 4096, 
+      responseMimeType: "text/plain",
+    };
+
+    const chatSession = model.startChat({ generationConfig });
+
+    const prompt = `以下のコード差分について、静的解析の観点から潜在的なセキュリティ脆弱性を特定し、日本語で指摘してください。脆弱性が見つからない場合は「特に懸念される脆弱性は検出されませんでした。」と報告してください。\\n\\n対象ライブラリ: ${dependencyName}\\n\\nコード差分:\\n\`\`\`diff\\n${codeDiff}\\n\`\`\`\\n\\n分析結果:`;
+
+    const result = await chatSession.sendMessage(prompt);
+    const analysisText = result.response.text();
+    console.log(`Gemini analysis complete for ${dependencyName}.`);
+    return analysisText || 'Geminiからの応答が空でした。';
+
+  } catch (error) {
+    console.error(`Error analyzing code diff for ${dependencyName} with Gemini: ${error.message}`);
+    if (error.response?.data) {
+        console.error('Gemini API Error Data:', error.response.data);
+    }
+    return `Gemini APIでのコード差分分析中にエラーが発生しました: ${error.message}`;
+  }
+}
+
+// --- Report Generation (Modified) ---
+
+function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDiffAnalyses, severityLevel) {
   let securityReport = '';
   let finalOverallRiskScore = 0;
   let finalMergeRecommendation = '判断不可';
-  let topRecommendations = [];
+  const topRecommendations = [];
 
   // --- 1. Process Data & Calculate Overall Scores ---
 
   // Dependency Analysis Data
   const depOverallRisk = dependencyAnalysis?.overall_risk_assessment;
   const depOverallScore = depOverallRisk?.overall_risk_score ?? 0; // Default to 0 if undefined
-  let depMergeRec = depOverallRisk?.merge_recommendation_jp ?? '判断不可';
+  const depMergeRec = depOverallRisk?.merge_recommendation_jp ?? '判断不可';
   const depImmediateAction = depOverallRisk?.requires_immediate_action_jp === 'あり';
 
   // Extract top recommendations from dependencies
   if (dependencyAnalysis?.dependencies) {
-      dependencyAnalysis.dependencies.forEach(dep => {
+      for (const dep of dependencyAnalysis.dependencies) {
           const actions = dep.recommendations_jp?.actions;
           if (actions && actions.length > 0) {
                const depRiskScore = dep.risk_score ?? 0; // Default to 0
-               // Prioritize recommendations for high-risk dependencies
                if (depRiskScore >= 7 || getSeverityScore(dep.security_findings?.severity) >= getSeverityScore('high')) {
                    topRecommendations.push(`**[依存関係] ${dep.name}:** ${actions[0]}`);
                }
           }
-      });
+      }
   }
   if (depImmediateAction && !topRecommendations.some(rec => rec.includes('即時対応'))) {
       topRecommendations.unshift('**[依存関係]** 分析結果に基づき、**即時対応が必要**です。');
@@ -282,24 +391,23 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, severi
   // Vulnerability Analysis Data
   const vulnOverallRisk = vulnerabilityResults?.overall_risk_assessment;
   const vulnOverallScore = vulnOverallRisk?.overall_risk_score ?? 0; // Default to 0
-  let vulnMergeRec = vulnOverallRisk?.merge_recommendation_jp ?? '判断不可';
+  const vulnMergeRec = vulnOverallRisk?.merge_recommendation_jp ?? '判断不可';
   let highSeverityVulnsExist = false;
 
   // Extract top recommendations from vulnerabilities
   if (vulnerabilityResults?.vulnerabilities && vulnerabilityResults.vulnerabilities.length > 0) {
-      vulnerabilityResults.vulnerabilities.forEach(vuln => {
+      for (const vuln of vulnerabilityResults.vulnerabilities) {
           const vulnRiskScore = vuln.risk_score ?? 0; // Default to 0
           const severityScore = getSeverityScore(vuln.severity);
-          if (severityScore >= getSeverityScore('high')) { // Consider high or critical as high severity
+          if (severityScore >= getSeverityScore('high')) {
               highSeverityVulnsExist = true;
           }
           if (vuln.mitigation?.recommended_fix_jp) {
-              // Prioritize recommendations for high-risk vulnerabilities
               if (vulnRiskScore >= 7 || severityScore >= getSeverityScore('high')) {
                  topRecommendations.push(`**[脆弱性] ${vuln.type || '不明'}:** ${vuln.mitigation.recommended_fix_jp}`);
               }
           }
-      });
+      }
   }
 
   // Determine Final Overall Score and Merge Recommendation
@@ -345,17 +453,17 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, severi
           if (!a.startsWith('**[依存関係]') && b.startsWith('**[依存関係]')) return 1;
           return 0;
       });
-      topRecommendations.slice(0, 5).forEach(rec => { // Show up to 5 recommendations
+      for (const rec of topRecommendations.slice(0, 5)) {
           securityReport += `- ${rec}\n`;
-      });
+      }
   }
   securityReport += '\n---\n\n';
 
   // Detailed Dependency Analysis
   securityReport += '## 変更された依存関係の詳細\n\n';
   if (dependencyAnalysis?.dependencies && dependencyAnalysis.dependencies.length > 0) {
-    dependencyAnalysis.dependencies.forEach((dep, index) => {
-      securityReport += `### ${index + 1}. \`${dep.name}\`\n`;
+    for (const dep of dependencyAnalysis.dependencies) {
+      securityReport += `### ${dep.name}\n`;
       if (dep.change_type === 'updated') {
         securityReport += `*   **バージョン変更:** \`${dep.version_change?.from}\` → \`${dep.version_change?.to}\`\n`;
       } else {
@@ -387,8 +495,15 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, severi
                  securityReport += `    *   代替案: ${dep.recommendations_jp.alternatives.join(', ')}\n`;
            }
       }
+      // *** Add Code Diff Analysis Result ***
+      if (codeDiffAnalyses?.[dep.name]) {
+          securityReport += `*   **コード差分セキュリティ分析 (Gemini):**\n`;
+          // Format the Gemini response nicely (e.g., indent, use code blocks if needed)
+          const geminiResult = codeDiffAnalyses[dep.name].split('\n').map(line => `    > ${line}`).join('\n');
+          securityReport += `${geminiResult}\n`;
+      }
       securityReport += '\n';
-    });
+    }
   } else {
       securityReport += '変更された依存関係はありませんでした。\n';
   }
@@ -397,9 +512,9 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, severi
   // Detailed Vulnerability Analysis
   securityReport += '## 検出された脆弱性・懸念事項\n\n';
   if (vulnerabilityResults?.vulnerabilities && vulnerabilityResults.vulnerabilities.length > 0) {
-        vulnerabilityResults.vulnerabilities.forEach((vuln, index) => {
+        for (const vuln of vulnerabilityResults.vulnerabilities) {
             const vulnRiskScoreText = vuln.risk_score !== undefined ? `${vuln.risk_score} / 10 点` : 'N/A';
-            securityReport += `### ${index + 1}. ${vuln.type || '未分類の問題'}\n`;
+            securityReport += `### ${vuln.type || '未分類の問題'}\n`;
             securityReport += `*   **リスクスコア:** ${vulnRiskScoreText} (重要度: ${vuln.severity || 'N/A'})\\n`;
             securityReport += `*   **説明:** ${vuln.description_jp || vuln.description || '詳細なし'}\n`; // Fallback to english
              if (vuln.mitigation) {
@@ -415,7 +530,7 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, severi
                  securityReport += `*   コード箇所: ${vuln.evidence.code_location}\n`;
              }
             securityReport += '\n';
-        });
+        }
   } else {
         securityReport += '検出された脆弱性・懸念事項はありませんでした。\n';
   }
@@ -456,22 +571,22 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, severi
   let maxSeverityFound = 'low';
   let maxSeverityScore = 0;
   if(dependencyAnalysis?.dependencies) {
-       dependencyAnalysis.dependencies.forEach(d => {
+       for (const d of dependencyAnalysis.dependencies) {
            const currentScore = getSeverityScore(d.security_findings?.severity);
             if(currentScore > maxSeverityScore) {
                 maxSeverityScore = currentScore;
                 maxSeverityFound = d.security_findings.severity;
             }
-       });
+       }
   }
   if(vulnerabilityResults?.vulnerabilities) {
-        vulnerabilityResults.vulnerabilities.forEach(v => {
+        for (const v of vulnerabilityResults.vulnerabilities) {
             const currentScore = getSeverityScore(v.severity);
              if(currentScore > maxSeverityScore) {
                  maxSeverityScore = currentScore;
                  maxSeverityFound = v.severity;
              }
-        });
+        }
   }
   const thresholdSeverityScore = getSeverityScore(severityLevel || 'medium');
 
@@ -527,7 +642,7 @@ async function run() {
         console.log('脆弱性スキャン結果 (生):', JSON.stringify(vulnerabilityResults, null, 2));
 
         // レポート生成
-        const securityReport = generateSecurityReport(dependencyAnalysis, vulnerabilityResults, severityLevel);
+        const securityReport = generateSecurityReport(dependencyAnalysis, vulnerabilityResults, {}, severityLevel);
         console.log('\n--- 生成されたセキュリティレポート ---');
         console.log(securityReport);
         console.log('--- レポートここまで ---');
