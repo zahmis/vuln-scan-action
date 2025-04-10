@@ -253,18 +253,10 @@ function getSeverityScore(severity) {
     }
 }
 
-// --- New Functions for Code Diff Analysis ---
-
-/**
- * Creates a temporary directory for cloning.
- */
 function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), TEMP_DIR_PREFIX));
 }
 
-/**
- * Removes the temporary directory.
- */
 function cleanupTempDir(dirPath) {
   if (dirPath && fs.existsSync(dirPath)) {
     fs.rmSync(dirPath, { recursive: true, force: true });
@@ -272,10 +264,6 @@ function cleanupTempDir(dirPath) {
   }
 }
 
-/**
- * Gets the code diff between two tags/versions for a given dependency repo.
- * Uses local git commands after cloning.
- */
 async function getDependencyCodeDiff(dependencyName, versionFrom, versionTo) {
   let tempDir = null;
   try {
@@ -355,8 +343,6 @@ async function analyzeCodeDiffWithGemini(codeDiff, dependencyName) {
     return `Gemini APIでのコード差分分析中にエラーが発生しました: ${error.message}`;
   }
 }
-
-// --- Report Generation (Modified) ---
 
 function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDiffAnalyses, severityLevel) {
   let securityReport = '';
@@ -547,7 +533,7 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDi
         securityReport += '*   メタデータは利用できませんでした。\n';
   }
 
-  // --- 3. Set Action Outputs & Failure Condition ---
+  // --- 3. Set Action Outputs & Issue Warning/Error ---
   console.log(`レポート生成完了。総合リスクスコア: ${finalOverallRiskScore}, マージ判断: ${finalMergeRecommendation}`);
 
   // Set action output
@@ -555,52 +541,13 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDi
   core.setOutput('overall_risk_score', finalOverallRiskScore);
   core.setOutput('merge_recommendation', finalMergeRecommendation);
 
-  // Fail the action based on score or merge recommendation
-  let shouldFail = false;
-  // Fail if score is high enough (e.g., 7+) OR if recommendation requires action before merge
-  if (finalOverallRiskScore >= 7) {
-      console.log(`リスクスコア (${finalOverallRiskScore}) が閾値 (7) 以上です。`);
-      shouldFail = true;
-  }
-  if (finalMergeRecommendation === 'マージ前に対応必須') {
-       console.log('マージ前に対応が必要と判断されました。');
-       shouldFail = true;
-  }
+  // Issue Warning or Error instead of Failing the step
+  const reportSummary = `総合リスクスコア: ${finalOverallRiskScore}/10。マージ判断: ${finalMergeRecommendation}。詳細はレポートを確認してください。`;
 
-  // Optionally fail based on severity threshold input
-  let maxSeverityFound = 'low';
-  let maxSeverityScore = 0;
-  if(dependencyAnalysis?.dependencies) {
-       for (const d of dependencyAnalysis.dependencies) {
-           const currentScore = getSeverityScore(d.security_findings?.severity);
-            if(currentScore > maxSeverityScore) {
-                maxSeverityScore = currentScore;
-                maxSeverityFound = d.security_findings.severity;
-            }
-       }
-  }
-  if(vulnerabilityResults?.vulnerabilities) {
-        for (const v of vulnerabilityResults.vulnerabilities) {
-            const currentScore = getSeverityScore(v.severity);
-             if(currentScore > maxSeverityScore) {
-                 maxSeverityScore = currentScore;
-                 maxSeverityFound = v.severity;
-             }
-        }
-  }
-  const thresholdSeverityScore = getSeverityScore(severityLevel || 'medium');
-
-  if (maxSeverityScore >= thresholdSeverityScore) {
-      console.log(`検出された最大重要度 (${maxSeverityFound || 'N/A'}) が指定された閾値 (${severityLevel || 'medium'}) 以上です。`);
-      // Uncomment below if high severity finding should always fail the check
-      // shouldFail = true;
-  }
-
-
-  if (shouldFail) {
-    // Provide a more informative failure message
-    core.setFailed(`セキュリティレビューが必要です。総合リスクスコア: ${finalOverallRiskScore}/10。マージ判断: ${finalMergeRecommendation}。詳細はレポートを確認してください。`);
-    core.saveState('isFailed', 'true'); // Save state to prevent notice message
+  if (finalMergeRecommendation === 'マージ前に対応必須' || finalOverallRiskScore >= 8) {
+      core.error(`重要度の高いセキュリティリスクが検出されました。${reportSummary}`);
+  } else if (finalMergeRecommendation === '注意してマージ' || finalOverallRiskScore >= 5) {
+      core.warning(`注意が必要なセキュリティリスクが検出されました。${reportSummary}`);
   }
 
   return securityReport; // Return the generated report string
@@ -623,6 +570,8 @@ async function run() {
           core.setFailed('Pull request contextが見つかりません。');
           return;
       }
+      let codeDiffAnalyses = {}; // Store results
+
       try {
         // PR差分を取得
         const diff = await getDiffContent(
@@ -637,12 +586,30 @@ async function run() {
         const dependencyAnalysis = await analyzeDependencies(diff);
         console.log('依存関係の分析結果 (生):', JSON.stringify(dependencyAnalysis, null, 2));
 
-        // 脆弱性スキャン (依存関係の結果を渡す)
+        // *** Analyze Code Diffs for Updated Dependencies ***
+        if (dependencyAnalysis?.dependencies) {
+          for (const dep of dependencyAnalysis.dependencies) {
+            if (dep.change_type === 'updated' && dep.version_change?.from && dep.version_change?.to) {
+              console.log(`\nFetching code diff for ${dep.name}...`);
+              // 1. コード差分を取得
+              const codeDiff = await getDependencyCodeDiff(dep.name, dep.version_change.from, dep.version_change.to);
+              if (codeDiff) {
+                // 2. Geminiで分析
+                const analysisResult = await analyzeCodeDiffWithGemini(codeDiff, dep.name);
+                codeDiffAnalyses[dep.name] = analysisResult; // 結果を格納
+              } else {
+                codeDiffAnalyses[dep.name] = 'コード差分の取得または分析に失敗しました。';
+              }
+            }
+          }
+        }
+        // ****************************************************
+
         const vulnerabilityResults = await analyzeVulnerabilities(diff, dependencyAnalysis?.dependencies || []);
         console.log('脆弱性スキャン結果 (生):', JSON.stringify(vulnerabilityResults, null, 2));
 
         // レポート生成
-        const securityReport = generateSecurityReport(dependencyAnalysis, vulnerabilityResults, {}, severityLevel);
+        const securityReport = generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDiffAnalyses, severityLevel);
         console.log('\n--- 生成されたセキュリティレポート ---');
         console.log(securityReport);
         console.log('--- レポートここまで ---');
@@ -657,9 +624,9 @@ async function run() {
         });
         console.log('コメント投稿完了。');
 
-        // Check if the action has failed (setFailed was called)
-        // Use a saved state because core.getStatus() might not be immediately updated
-        if (process.env.GITHUB_ACTIONS === 'true' && core.getState('isFailed') !== 'true') {
+        // Check if the action is running in GitHub Actions environment
+        // No need to check for failure state anymore
+        if (process.env.GITHUB_ACTIONS === 'true') {
              core.notice('スキャン完了。詳細はPRコメントを確認してください。');
         }
 
