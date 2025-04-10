@@ -80,11 +80,7 @@ release: clean install build update-version
 	@echo "🚀 リリースプロセスを開始します..."
 	@echo "現在のバージョン: $(VERSION)"
 	@echo "次のバージョン: $(NEXT_VERSION)"
-	@read -p "リリースを続行しますか？ [y/N] " answer; \
-	if [ "$$answer" != "y" ]; then \
-		echo "リリースを中止します"; \
-		exit 1; \
-	fi
+
 	@echo "🔨 変更をコミットしています..."
 	git add .
 	git commit -m "Release $(NEXT_VERSION)"

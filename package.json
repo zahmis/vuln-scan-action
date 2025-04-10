@@ -1,6 +1,6 @@
 {
   "name": "vuln-scan-action",
-  "version": "1.0.42",
+  "version": "1.0.43",
   "description": "GitHub Action for vulnerability scanning",
   "main": "index.js",
   "scripts": {
