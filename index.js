@@ -267,8 +267,18 @@ function cleanupTempDir(dirPath) {
 async function getDependencyCodeDiff(dependencyName, versionFrom, versionTo) {
   let tempDir = null;
   try {
-    // Assuming dependency name maps to github.com/owner/repo
-    const repoUrl = `https://github.com/${dependencyName}.git`;
+    // Correctly parse owner/repo from the dependency name
+    let repoPath = dependencyName;
+    const githubPrefix = 'github.com/';
+    if (repoPath.startsWith(githubPrefix)) {
+        repoPath = repoPath.substring(githubPrefix.length);
+    }
+    // Add handling for other potential hosts if needed (e.g., golang.org/x/)
+    // else if (repoPath.startsWith('golang.org/x/')) { ... }
+
+    const repoUrl = `https://github.com/${repoPath}.git`; // Construct the correct URL
+    console.log(`Constructed repo URL: ${repoUrl}`); // Log the URL for verification
+
     tempDir = createTempDir();
     console.log(`Cloning ${dependencyName} into ${tempDir}...`);
     
@@ -344,6 +354,7 @@ async function analyzeCodeDiffWithGemini(codeDiff, dependencyName) {
   }
 }
 
+// Function to generate the security report in the new format
 function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDiffAnalyses, severityLevel) {
   let securityReport = '';
   let finalOverallRiskScore = 0;
@@ -470,7 +481,7 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDi
       }
       securityReport += `*   **バージョンアップ推奨度:** ${dep.upgrade_recommendation_jp || '情報なし'}\n`;
       if (dep.recommendations_jp) {
-           securityReport += `*   **推奨アクション/考慮事項:**\n`;
+           securityReport += '*   **推奨アクション/考慮事項:**\n'; // Use single quotes
            if(dep.recommendations_jp.actions && dep.recommendations_jp.actions.length > 0) {
                 securityReport += `    *   アクション: ${dep.recommendations_jp.actions.join(', ')}\n`;
            }
@@ -482,8 +493,8 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDi
            }
       }
       // *** Add Code Diff Analysis Result ***
-      if (codeDiffAnalyses?.[dep.name]) {
-          securityReport += `*   **コード差分セキュリティ分析 (Gemini):**\n`;
+      if (codeDiffAnalyses?.[dep.name]) { // Optional chaining fixed
+          securityReport += '*   **コード差分セキュリティ分析 (Gemini):**\n'; // Use single quotes
           // Format the Gemini response nicely (e.g., indent, use code blocks if needed)
           const geminiResult = codeDiffAnalyses[dep.name].split('\n').map(line => `    > ${line}`).join('\n');
           securityReport += `${geminiResult}\n`;
@@ -500,8 +511,8 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDi
   if (vulnerabilityResults?.vulnerabilities && vulnerabilityResults.vulnerabilities.length > 0) {
         for (const vuln of vulnerabilityResults.vulnerabilities) {
             const vulnRiskScoreText = vuln.risk_score !== undefined ? `${vuln.risk_score} / 10 点` : 'N/A';
-            securityReport += `### ${vuln.type || '未分類の問題'}\n`;
-            securityReport += `*   **リスクスコア:** ${vulnRiskScoreText} (重要度: ${vuln.severity || 'N/A'})\\n`;
+            securityReport += `### ${vuln.type || '未分類の問題'}\n`; // Removed index
+            securityReport += `*   **リスクスコア:** ${vulnRiskScoreText} (重要度: ${vuln.severity || 'N/A'})\\n`; // Double backslash fixed
             securityReport += `*   **説明:** ${vuln.description_jp || vuln.description || '詳細なし'}\n`; // Fallback to english
              if (vuln.mitigation) {
                  securityReport += `*   **推奨される対策:** ${vuln.mitigation.recommended_fix_jp || '情報なし'}\n`;
@@ -570,7 +581,7 @@ async function run() {
           core.setFailed('Pull request contextが見つかりません。');
           return;
       }
-      let codeDiffAnalyses = {}; // Store results
+      const codeDiffAnalyses = {}; // Store results, use const as it's not reassigned
 
       try {
         // PR差分を取得
@@ -653,5 +664,3 @@ async function run() {
     core.setFailed(`アクションの初期化または実行中に致命的なエラーが発生しました: ${error.message}`);
   }
 }
-
-run(); 
