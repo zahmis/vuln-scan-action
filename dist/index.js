@@ -41867,65 +41867,63 @@ function cleanupTempDir(dirPath) {
 async function getDependencyCodeDiff(dependencyName, versionFrom, versionTo) {
   let tempDir = null;
   try {
-    // Correctly parse owner/repo from the dependency name
+    // --- Corrected URL Parsing Logic ---
     let repoPath = dependencyName;
     const githubPrefix = 'github.com/';
     if (repoPath.startsWith(githubPrefix)) {
-      repoPath = repoPath.substring(githubPrefix.length);
+      repoPath = repoPath.substring(githubPrefix.length); // -> golang-jwt/jwt/v4
     }
-    const repoUrl = `https://github.com/${repoPath}.git`;
+    // Remove trailing /vN suffix if present (common in Go modules)
+    const versionSuffixMatch = repoPath.match(/\/v(\d+)$/);
+    if (versionSuffixMatch) {
+      repoPath = repoPath.substring(0, repoPath.length - versionSuffixMatch[0].length); // -> golang-jwt/jwt
+    }
+    // --- End of Corrected Logic ---
+
+    const repoUrl = `https://github.com/${repoPath}.git`; // -> https://github.com/golang-jwt/jwt.git
     console.log(`Constructed repo URL: ${repoUrl}`);
 
     tempDir = createTempDir();
-    console.log(`Cloning ${dependencyName} (branch: ${versionTo}) into ${tempDir}...`);
+    console.log(`Cloning ${repoPath} (branch: ${versionTo}) into ${tempDir}...`); // Log corrected path
 
     // Clone the target version first
-    // Use pipe for stdio to capture output/error, increase timeout
-    execSync(`git clone --depth 1 --branch ${versionTo} ${repoUrl} .`, { cwd: tempDir, stdio: 'pipe', encoding: 'utf8', timeout: 480000 }); // 8 min timeout
+    execSync(`git clone --depth 1 --branch ${versionTo} ${repoUrl} .`, { cwd: tempDir, stdio: 'pipe', encoding: 'utf8', timeout: 480000 });
     console.log(`Clone complete for branch ${versionTo}.`);
 
     // Fetch the specific tag/ref for the 'from' version
     console.log(`Fetching tag ${versionFrom}...`);
-    // Use pipe for stdio, increase timeout
-    execSync(`git fetch origin refs/tags/${versionFrom}:refs/tags/${versionFrom} --depth 1 --no-tags`, { cwd: tempDir, stdio: 'pipe', encoding: 'utf8', timeout: 300000 }); // 5 min timeout
+    execSync(`git fetch origin refs/tags/${versionFrom}:refs/tags/${versionFrom} --depth 1 --no-tags`, { cwd: tempDir, stdio: 'pipe', encoding: 'utf8', timeout: 300000 });
     console.log(`Fetch complete for tag ${versionFrom}.`);
 
     // Verify the tag exists locally
-    console.log(`Verifying local tags...`);
-    const tagsOutput = execSync(`git tag -l`, { cwd: tempDir, encoding: 'utf8' });
+    console.log('Verifying local tags...'); // Use single quotes
+    const tagsOutput = execSync('git tag -l', { cwd: tempDir, encoding: 'utf8' }); // Use single quotes
     console.log(`Local tags found:\n${tagsOutput}`);
-    // Simple check if the version string exists in the tag list
     if (!tagsOutput.split('\n').includes(versionFrom)) {
-        console.warn(`Tag ${versionFrom} not found locally after fetch! Double-checking fetch command.`);
-        // Fallback fetch without refspec (might be less efficient but could work)
-        // console.log(`Retrying fetch for tag ${versionFrom} without specific refspec...`);
-        // execSync(`git fetch origin tag ${versionFrom} --depth 1 --no-tags`, { cwd: tempDir, stdio: 'pipe', encoding: 'utf8', timeout: 300000 });
+        console.warn(`Tag ${versionFrom} not found locally after fetch!`);
+        // Potentially add fallback logic here if needed
     }
 
-    console.log(`Calculating diff between tags/${versionFrom} and HEAD (${versionTo}) for ${dependencyName}...`);
-    // Use explicit tag reference for 'from' and HEAD for 'to'
-    // Increase timeout for diff calculation
-    const diffOutput = execSync(`git diff tags/${versionFrom} HEAD`, { cwd: tempDir, encoding: 'utf8', maxBuffer: 75 * 1024 * 1024, timeout: 300000 }); // 75MB buffer, 5 min timeout
+    console.log(`Calculating diff between tags/${versionFrom} and HEAD (${versionTo}) for ${repoPath}...`); // Log corrected path
+    const diffOutput = execSync(`git diff tags/${versionFrom} HEAD`, { cwd: tempDir, encoding: 'utf8', maxBuffer: 75 * 1024 * 1024, timeout: 300000 });
     console.log(`Diff calculation successful. Diff length: ${diffOutput.length}`);
 
     cleanupTempDir(tempDir);
     return diffOutput;
 
   } catch (error) {
-    // Log more detailed error information
     console.error(`Error during getDependencyCodeDiff for ${dependencyName} (${versionFrom}..${versionTo}): ${error.message}`);
-    // Check if stdout/stderr exist before trying to read them
     if (error.stdout) {
-      console.error(`stdout:\n${error.stdout.toString().slice(0, 1000)}...`); // Log first 1000 chars
+      console.error(`stdout:\n${error.stdout.toString().slice(0, 1000)}...`);
     }
     if (error.stderr) {
-      console.error(`stderr:\n${error.stderr.toString().slice(0, 1000)}...`); // Log first 1000 chars
+      console.error(`stderr:\n${error.stderr.toString().slice(0, 1000)}...`);
     }
     if (error.status !== null) {
          console.error(`Command exited with status ${error.status}`);
     }
     cleanupTempDir(tempDir);
-    return null; // Indicate diff could not be obtained
+    return null;
   }
 }
 
