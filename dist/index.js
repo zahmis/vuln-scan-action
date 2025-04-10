@@ -41902,14 +41902,14 @@ async function analyzeCodeDiffWithGemini(codeDiff, dependencyName, versionFrom, 
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro-preview-03-25"}); // Use the latest appropriate model
 
     const generationConfig = {
-      temperature: 0.3, // Slightly higher temp for more descriptive analysis
+      temperature: 0.3, // Increased temperature slightly
       maxOutputTokens: 2048,
       responseMimeType: "text/plain",
     };
 
     const chatSession = model.startChat({ generationConfig });
 
-    // Updated prompt focusing on the 'what' and 'security impact'
+    // Updated prompt focusing on the 'what' and 'security impact', and adding instruction to avoid empty response
     const prompt = `
 あなたは提出されたコード差分をレビューするセキュリティエンジニアです。以下の ${dependencyName} ライブラリのバージョン ${versionFrom} から ${versionTo} へのコード差分について、静的解析の観点からレビューしてください。
 
@@ -41926,6 +41926,7 @@ ${codeDiff}
     *   **総合評価:** 変更内容と影響を踏まえ、この差分に対するセキュリティ観点での総合的な評価（例：「明確な改善」「軽微な改善」「影響なし」「要注意」など）を記述してください。
 
 脆弱性が見つからない、またはセキュリティへの影響が特にない場合は、その旨を明確に記述してください。単に「問題なし」とするのではなく、「特定の改善点が確認された」「特筆すべきセキュリティリスクは見当たらない」のように具体的に記述することが望ましいです。
+**注意:** 必ず何らかの分析結果（変更内容の概要、影響評価、または「特筆すべき点なし」という結論のいずれか）を応答に含めてください。応答が空にならないようにしてください。
 `;
 
     const result = await chatSession.sendMessage(prompt);
