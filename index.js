@@ -281,14 +281,17 @@ async function getDependencyCodeDiff(dependencyName, versionFrom, versionTo) {
 
     tempDir = createTempDir();
     console.log(`Cloning ${dependencyName} into ${tempDir}...`);
-    
-    // Use execSync for local git commands
-    execSync(`git clone --depth 1 --branch ${versionTo} ${repoUrl} .`, { cwd: tempDir, stdio: 'inherit' });
-    // Fetch the specific tag for the 'from' version
-    execSync(`git fetch origin refs/tags/${versionFrom}:refs/tags/${versionFrom} --depth 1`, { cwd: tempDir, stdio: 'inherit' });
 
-    console.log(`Calculating diff between ${versionFrom} and ${versionTo} for ${dependencyName}...`);
-    const diffOutput = execSync(`git diff ${versionFrom} ${versionTo}`, { cwd: tempDir, encoding: 'utf8', maxBuffer: 50 * 1024 * 1024 }); // 50MB buffer
+    // Use execSync for local git commands
+    // Clone the target version first
+    execSync(`git clone --depth 1 --branch ${versionTo} ${repoUrl} .`, { cwd: tempDir, stdio: 'inherit', timeout: 300000 }); // 5 min timeout
+    // Fetch the specific tag/ref for the 'from' version without fetching history
+    console.log(`Fetching tag ${versionFrom}...`);
+    execSync(`git fetch origin refs/tags/${versionFrom}:refs/tags/${versionFrom} --depth 1 --no-tags`, { cwd: tempDir, stdio: 'inherit', timeout: 180000 }); // 3 min timeout
+
+    console.log(`Calculating diff between tags/${versionFrom} and ${versionTo} for ${dependencyName}...`);
+    // *** Use explicit tag reference for the 'from' version in git diff ***
+    const diffOutput = execSync(`git diff tags/${versionFrom} ${versionTo}`, { cwd: tempDir, encoding: 'utf8', maxBuffer: 50 * 1024 * 1024, timeout: 180000 }); // 50MB buffer, 3 min timeout
 
     cleanupTempDir(tempDir);
     return diffOutput;
