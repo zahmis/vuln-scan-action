@@ -7,9 +7,51 @@ const { execSync } = require('node:child_process');
 const os = require('node:os');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-// Perplexity APIのエンドポイント
+// === Constants ===
 const PERPLEXITY_API_ENDPOINT = 'https://api.perplexity.ai/chat/completions';
+const PERPLEXITY_MODEL = "sonar-pro"; // Model used for dependency and vulnerability analysis
+const GEMINI_MODEL = "gemini-2.5-pro-preview-03-25"; // Model used for code diff analysis
 const TEMP_DIR_PREFIX = 'dep-clone-';
+const MAX_COMMENT_LENGTH = 65536; // GitHub comment length limit
+const MAX_DIFF_LENGTH_GEMINI = 1000000; // Max diff length for Gemini analysis
+const GIT_TIMEOUT_MS = {
+    clone: 480000, // 8 minutes
+    fetch: 300000, // 5 minutes
+    diff: 300000   // 5 minutes
+};
+const API_TIMEOUT_MS = 180000; // 3 minutes for Perplexity API calls
+
+// Report Labels (Japanese)
+const REPORT_LABELS_JP = {
+    overallAssessment: '総合評価',
+    reason: '理由',
+    dependencyChanges: '依存関係の変更詳細',
+    change: '変更',
+    versionUpdate: 'バージョンアップ',
+    added: '追加',
+    removed: '削除',
+    currentVersionRisks: '現状のリスク',
+    newVersionAssessment: '更新後 の評価',
+    improvements: '改善点',
+    potentialRisks: '潜在的リスク',
+    upgradeDecision: 'アップグレード判断',
+    adoptionDecision: '導入判断',
+    description: '概要',
+    knownRisks: '既知のリスク',
+    removalImpact: '影響',
+    codeDiffAnalysis: 'コード差分分析 (Gemini)',
+    analysisSkipped: 'スキップまたは失敗',
+    vulnerabilitiesFound: '検出された脆弱性・懸念事項',
+    severity: '重要度',
+    changeImpact: '変更影響',
+    location: '関連箇所',
+    vulnDescription: '説明',
+    recommendation: '推奨対策',
+    noDependenciesFound: '分析対象の依存関係の変更はありませんでした。',
+    noVulnerabilitiesFound: '今回の変更に関連する新たな脆弱性や懸念事項は検出されませんでした。'
+};
+
+// === End Constants ===
 
 // --- GitHub Interaction ---
 
@@ -32,7 +74,6 @@ async function getDiffContent(octokit, owner, repo, pullNumber) {
 }
 
 async function postComment(octokit, owner, repo, issueNumber, body) {
-    const MAX_COMMENT_LENGTH = 65536; // GitHub comment length limit
     let commentBody = body;
 
     if (commentBody.length > MAX_COMMENT_LENGTH) {
@@ -70,7 +111,7 @@ async function analyzeDependencies(diff) {
   console.log('Starting dependency analysis with Perplexity...');
   try {
     const response = await axios.post(PERPLEXITY_API_ENDPOINT, {
-      model: "sonar-pro", // Or another suitable model
+      model: PERPLEXITY_MODEL,
       messages: [
         {
           role: "system",
@@ -148,7 +189,7 @@ async function analyzeDependencies(diff) {
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       },
-      timeout: 180000 // 3 minute timeout
+      timeout: API_TIMEOUT_MS
     });
 
     let content = response.data.choices[0].message.content;
@@ -194,7 +235,7 @@ async function analyzeVulnerabilities(diff, dependencies) {
   console.log('Starting vulnerability analysis with Perplexity...');
   try {
     const response = await axios.post(PERPLEXITY_API_ENDPOINT, {
-      model: "sonar-pro", // Or another suitable model
+      model: PERPLEXITY_MODEL,
       messages: [
         {
           role: "system",
@@ -251,7 +292,7 @@ ${JSON.stringify(depContext, null, 2)}
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       },
-      timeout: 180000 // 3 minute timeout
+      timeout: API_TIMEOUT_MS
     });
 
     let content = response.data.choices[0].message.content;
@@ -290,8 +331,7 @@ async function analyzeCodeDiffWithGemini(codeDiff, dependencyName, versionFrom, 
     return 'コード差分が空のためスキップ';
   }
 
-  const MAX_DIFF_LENGTH = 1000000;
-  if (codeDiff.length > MAX_DIFF_LENGTH) {
+  if (codeDiff.length > MAX_DIFF_LENGTH_GEMINI) {
       console.warn(`Code diff for ${dependencyName} is too large (${codeDiff.length} chars). Skipping Gemini analysis.`);
       return `コード差分長すぎ (${codeDiff.length}文字) のためスキップ`;
   }
@@ -299,17 +339,16 @@ async function analyzeCodeDiffWithGemini(codeDiff, dependencyName, versionFrom, 
   console.log(`Analyzing code diff for ${dependencyName} (${versionFrom} -> ${versionTo}) with Gemini...`);
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro-preview-03-25"}); // Use the latest appropriate model
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
     const generationConfig = {
-      temperature: 0.3, // Increased temperature slightly
+      temperature: 0.3,
       maxOutputTokens: 2048,
       responseMimeType: "text/plain",
     };
 
     const chatSession = model.startChat({ generationConfig });
 
-    // Updated prompt focusing on the 'what' and 'security impact', and adding instruction to avoid empty response
     const prompt = `
 あなたは提出されたコード差分をレビューするセキュリティエンジニアです。以下の ${dependencyName} ライブラリのバージョン ${versionFrom} から ${versionTo} へのコード差分について、静的解析の観点からレビューしてください。
 
@@ -364,19 +403,17 @@ async function getDependencyCodeDiff(dependencyName, versionFrom, versionTo) {
   }
   let tempDir = null;
   try {
-    // Corrected URL Parsing Logic
     let repoPath = dependencyName;
     const githubPrefix = 'github.com/';
     if (repoPath.startsWith(githubPrefix)) {
       repoPath = repoPath.substring(githubPrefix.length);
     }
     const versionSuffixMatch = repoPath.match(/\/v(\d+)$/);
-    let repoNameOnly = repoPath; // Store the name without version suffix for logging
+    let repoNameOnly = repoPath;
     if (versionSuffixMatch) {
       repoNameOnly = repoPath.substring(0, repoPath.length - versionSuffixMatch[0].length);
-      repoPath = repoNameOnly; // Use the path without suffix for URL
+      repoPath = repoNameOnly;
     }
-    // End of Corrected Logic
 
     const repoUrl = `https://github.com/${repoPath}.git`;
     console.log(`Constructed repo URL: ${repoUrl}`);
@@ -384,36 +421,31 @@ async function getDependencyCodeDiff(dependencyName, versionFrom, versionTo) {
     tempDir = createTempDir();
     console.log(`Cloning ${repoNameOnly} (branch: ${versionTo}) into ${tempDir}...`);
 
-    // Clone the target version first
-    execSync(`git clone --quiet --depth 1 --branch ${versionTo} ${repoUrl} .`, { cwd: tempDir, stdio: 'pipe', encoding: 'utf8', timeout: 480000 });
+    execSync(`git clone --quiet --depth 1 --branch ${versionTo} ${repoUrl} .`, { cwd: tempDir, stdio: 'pipe', encoding: 'utf8', timeout: GIT_TIMEOUT_MS.clone });
     console.log(`Clone complete for branch ${versionTo}.`);
 
-    // Fetch the specific tag/ref for the 'from' version
     console.log(`Fetching tag ${versionFrom}...`);
-    // Use a try-catch specifically for fetch as tags might not always exist perfectly
     try {
-        execSync(`git fetch --quiet origin refs/tags/${versionFrom}:refs/tags/${versionFrom} --depth 1 --no-tags`, { cwd: tempDir, stdio: 'pipe', encoding: 'utf8', timeout: 300000 });
+        execSync(`git fetch --quiet origin refs/tags/${versionFrom}:refs/tags/${versionFrom} --depth 1 --no-tags`, { cwd: tempDir, stdio: 'pipe', encoding: 'utf8', timeout: GIT_TIMEOUT_MS.fetch });
         console.log(`Fetch complete for tag ${versionFrom}.`);
     } catch (fetchError) {
         console.warn(`Failed to fetch exact tag ref 'refs/tags/${versionFrom}'. Trying fetch by tag name only...`);
         console.warn(`Fetch error details: ${fetchError.message}`);
-        // Fallback: try fetching just the tag name. Might fetch more history but could work.
-        execSync(`git fetch --quiet origin tag ${versionFrom} --depth 1 --no-tags`, { cwd: tempDir, stdio: 'pipe', encoding: 'utf8', timeout: 300000 });
+        execSync(`git fetch --quiet origin tag ${versionFrom} --depth 1 --no-tags`, { cwd: tempDir, stdio: 'pipe', encoding: 'utf8', timeout: GIT_TIMEOUT_MS.fetch });
         console.log(`Fallback fetch potentially completed for tag ${versionFrom}.`);
     }
 
-    // Verify the tag exists locally before diffing
     console.log('Verifying local tags...');
     const tagsOutput = execSync('git tag -l', { cwd: tempDir, encoding: 'utf8' });
     if (!tagsOutput.split('\n').includes(versionFrom)) {
         console.error(`Tag ${versionFrom} still not found locally after fetch attempts for ${repoNameOnly}. Cannot calculate diff.`);
         cleanupTempDir(tempDir);
-        return null; // Cannot proceed without the tag
+        return null;
     }
      console.log(`Tag ${versionFrom} confirmed locally.`);
 
     console.log(`Calculating diff between tags/${versionFrom} and HEAD (${versionTo}) for ${repoNameOnly}...`);
-    const diffOutput = execSync(`git diff tags/${versionFrom} HEAD`, { cwd: tempDir, encoding: 'utf8', maxBuffer: 75 * 1024 * 1024, timeout: 300000 });
+    const diffOutput = execSync(`git diff tags/${versionFrom} HEAD`, { cwd: tempDir, encoding: 'utf8', maxBuffer: 75 * 1024 * 1024, timeout: GIT_TIMEOUT_MS.diff });
     console.log(`Diff calculation successful. Diff length: ${diffOutput.length}`);
 
     cleanupTempDir(tempDir);
@@ -450,43 +482,43 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDi
 
   // --- 1. Overall Assessment ---
   const overall = dependencyAnalysis.overall_assessment;
-  report += `**総合評価:** ${overall.recommendation_jp || '判断不可'}\n`;
-  report += `**理由:** ${overall.reasoning_jp || 'N/A'}\n\n`;
+  report += `**${REPORT_LABELS_JP.overallAssessment}:** ${overall.recommendation_jp || '判断不可'}\n`;
+  report += `**${REPORT_LABELS_JP.reason}:** ${overall.reasoning_jp || 'N/A'}\n\n`;
   report += '---\n\n';
 
   // --- 2. Dependency Changes ---
-  report += '## 依存関係の変更詳細\n\n';
+  report += `## ${REPORT_LABELS_JP.dependencyChanges}\n\n`;
   if (!dependencyAnalysis.dependencies || dependencyAnalysis.dependencies.length === 0) {
-    report += '分析対象の依存関係の変更はありませんでした。\n';
+    report += REPORT_LABELS_JP.noDependenciesFound + '\n';
   } else {
     for (const dep of dependencyAnalysis.dependencies) {
       report += `### ${dep.name}\n`;
 
       if (dep.change_type === 'updated') {
-        report += `*   **変更:** バージョンアップ (\`${dep.version_change?.from}\` → \`${dep.version_change?.to}\`)\n`;
-        report += `*   **現状 (${dep.version_change?.from}) のリスク:** ${dep.current_version_risks_jp || '情報なし'}\n`;
+        report += `*   **${REPORT_LABELS_JP.change}:** ${REPORT_LABELS_JP.versionUpdate} (\`${dep.version_change?.from}\` → \`${dep.version_change?.to}\`)\n`;
+        report += `*   **${REPORT_LABELS_JP.currentVersionRisks} (${dep.version_change?.from}):** ${dep.current_version_risks_jp || '情報なし'}\n`;
         if (dep.new_version_assessment_jp) {
-            report += `*   **更新後 (${dep.version_change?.to}) の評価:**\n`;
-            report += `    *   改善点: ${dep.new_version_assessment_jp.improvements_jp || '特になし'}\n`;
-            report += `    *   潜在的リスク: ${dep.new_version_assessment_jp.potential_risks_jp || '特になし'}\n`;
+            report += `*   **${REPORT_LABELS_JP.newVersionAssessment} (${dep.version_change?.to}):**\n`;
+            report += `    *   ${REPORT_LABELS_JP.improvements}: ${dep.new_version_assessment_jp.improvements_jp || '特になし'}\n`;
+            report += `    *   ${REPORT_LABELS_JP.potentialRisks}: ${dep.new_version_assessment_jp.potential_risks_jp || '特になし'}\n`;
         }
-        report += `*   **アップグレード判断:** ${dep.upgrade_recommendation_jp || '判断不可'} - **理由:** ${dep.upgrade_reasoning_jp || 'N/A'}\n`;
+        report += `*   **${REPORT_LABELS_JP.upgradeDecision}:** ${dep.upgrade_recommendation_jp || '判断不可'} - **${REPORT_LABELS_JP.reason}:** ${dep.upgrade_reasoning_jp || 'N/A'}\n`;
         // Code Diff Analysis
         if (codeDiffAnalyses?.[dep.name]) {
-            report += `*   **コード差分分析 (Gemini):**\n\`\`\`\n${codeDiffAnalyses[dep.name]}\n\`\`\`\n`;
+            report += `*   **${REPORT_LABELS_JP.codeDiffAnalysis}:**\n\`\`\`\n${codeDiffAnalyses[dep.name]}\n\`\`\`\n`;
         } else {
-            report += `*   **コード差分分析 (Gemini):** スキップまたは失敗\n`;
+            report += `*   **${REPORT_LABELS_JP.codeDiffAnalysis}:** ${REPORT_LABELS_JP.analysisSkipped}\n`;
         }
 
       } else if (dep.change_type === 'added') {
-        report += `*   **変更:** 追加 (\`${dep.added_version}\`)\n`;
-        report += `*   **概要:** ${dep.description_jp || '情報なし'}\n`;
-        report += `*   **既知のリスク:** ${dep.known_risks_jp || '情報なし'}\n`;
-        report += `*   **導入判断:** ${dep.adoption_recommendation_jp || '判断不可'} - **理由:** ${dep.adoption_reasoning_jp || 'N/A'}\n`;
+        report += `*   **${REPORT_LABELS_JP.change}:** ${REPORT_LABELS_JP.added} (\`${dep.added_version}\`)\n`;
+        report += `*   **${REPORT_LABELS_JP.description}:** ${dep.description_jp || '情報なし'}\n`;
+        report += `*   **${REPORT_LABELS_JP.knownRisks}:** ${dep.known_risks_jp || '情報なし'}\n`;
+        report += `*   **${REPORT_LABELS_JP.adoptionDecision}:** ${dep.adoption_recommendation_jp || '判断不可'} - **${REPORT_LABELS_JP.reason}:** ${dep.adoption_reasoning_jp || 'N/A'}\n`;
 
       } else if (dep.change_type === 'removed') {
-        report += `*   **変更:** 削除\n`;
-        report += `*   **影響:** ${dep.removal_impact_jp || '影響の情報なし'}\n`;
+        report += `*   **${REPORT_LABELS_JP.change}:** ${REPORT_LABELS_JP.removed}\n`;
+        report += `*   **${REPORT_LABELS_JP.removalImpact}:** ${dep.removal_impact_jp || '影響の情報なし'}\n`;
       }
       report += '\n'; // Add space between dependencies
     }
@@ -494,17 +526,17 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDi
   report += '---\n\n';
 
   // --- 3. Vulnerabilities Found ---
-  report += '## 検出された脆弱性・懸念事項\n\n';
+  report += `## ${REPORT_LABELS_JP.vulnerabilitiesFound}\n\n`;
   if (!vulnerabilityResults.vulnerabilities || vulnerabilityResults.vulnerabilities.length === 0) {
-    report += '今回の変更に関連する新たな脆弱性や懸念事項は検出されませんでした。\n';
+    report += REPORT_LABELS_JP.noVulnerabilitiesFound + '\n';
   } else {
     for (const vuln of vulnerabilityResults.vulnerabilities) {
       report += `### ${vuln.name_jp || '名称不明の問題'}\n`;
-      report += `*   **重要度:** ${vuln.severity || '不明'}\n`;
-      report += `*   **変更影響:** ${vuln.change_impact || '不明'}\n`; // introduced, resolved, persistent
-      report += `*   **関連箇所:** ${vuln.location || '不明'}\n`;
-      report += `*   **説明:** ${vuln.description_jp || '詳細なし'}\n`;
-      report += `*   **推奨対策:** ${vuln.recommendation_jp || '情報なし'}\n\n`;
+      report += `*   **${REPORT_LABELS_JP.severity}:** ${vuln.severity || '不明'}\n`;
+      report += `*   **${REPORT_LABELS_JP.changeImpact}:** ${vuln.change_impact || '不明'}\n`;
+      report += `*   **${REPORT_LABELS_JP.location}:** ${vuln.location || '不明'}\n`;
+      report += `*   **${REPORT_LABELS_JP.vulnDescription}:** ${vuln.description_jp || '詳細なし'}\n`;
+      report += `*   **${REPORT_LABELS_JP.recommendation}:** ${vuln.recommendation_jp || '情報なし'}\n\n`;
     }
   }
 
