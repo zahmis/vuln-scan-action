@@ -41989,7 +41989,7 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDi
 
   // Dependency Analysis Data
   const depOverallRisk = dependencyAnalysis?.overall_risk_assessment;
-  const depOverallScore = depOverallRisk?.overall_risk_score ?? 0; // Default to 0 if undefined
+  const depOverallScore = depOverallRisk?.overall_risk_score ?? 0;
   const depMergeRec = depOverallRisk?.merge_recommendation_jp ?? '判断不可';
   const depImmediateAction = depOverallRisk?.requires_immediate_action_jp === 'あり';
 
@@ -41998,7 +41998,7 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDi
       for (const dep of dependencyAnalysis.dependencies) {
           const actions = dep.recommendations_jp?.actions;
           if (actions && actions.length > 0) {
-               const depRiskScore = dep.risk_score ?? 0; // Default to 0
+               const depRiskScore = dep.risk_score ?? 0;
                if (depRiskScore >= 7 || getSeverityScore(dep.security_findings?.severity) >= getSeverityScore('high')) {
                    topRecommendations.push(`**[依存関係] ${dep.name}:** ${actions[0]}`);
                }
@@ -42011,14 +42011,14 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDi
 
   // Vulnerability Analysis Data
   const vulnOverallRisk = vulnerabilityResults?.overall_risk_assessment;
-  const vulnOverallScore = vulnOverallRisk?.overall_risk_score ?? 0; // Default to 0
+  const vulnOverallScore = vulnOverallRisk?.overall_risk_score ?? 0;
   const vulnMergeRec = vulnOverallRisk?.merge_recommendation_jp ?? '判断不可';
   let highSeverityVulnsExist = false;
 
   // Extract top recommendations from vulnerabilities
   if (vulnerabilityResults?.vulnerabilities && vulnerabilityResults.vulnerabilities.length > 0) {
       for (const vuln of vulnerabilityResults.vulnerabilities) {
-          const vulnRiskScore = vuln.risk_score ?? 0; // Default to 0
+          const vulnRiskScore = vuln.risk_score ?? 0;
           const severityScore = getSeverityScore(vuln.severity);
           if (severityScore >= getSeverityScore('high')) {
               highSeverityVulnsExist = true;
@@ -42061,7 +42061,7 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDi
 
   // Report Summary
   securityReport += '## セキュリティ分析レポート (概要)\n\n';
-  securityReport += `**総合リスク評価:** ${finalOverallRiskScore} / 10 点\n`;
+  securityReport += `**危険度 (総合):** ${finalOverallRiskScore} / 10 点\n`;
   securityReport += `**マージ判断:** ${finalMergeRecommendation}\n`;
 
   if (topRecommendations.length > 0) {
@@ -42094,7 +42094,7 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDi
          }
       }
       const depRiskScoreText = dep.risk_score !== undefined ? `${dep.risk_score} / 10 点` : 'N/A';
-      securityReport += `*   **リスクスコア:** ${depRiskScoreText}\n`;
+      securityReport += `*   **危険度:** ${depRiskScoreText}\n`;
       if (dep.security_findings) {
             const findings = dep.security_findings;
             securityReport += `*   **主な変更/修正点 (重要度: ${findings.severity || '不明'}):**\n`;
@@ -42136,7 +42136,7 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDi
         for (const vuln of vulnerabilityResults.vulnerabilities) {
             const vulnRiskScoreText = vuln.risk_score !== undefined ? `${vuln.risk_score} / 10 点` : 'N/A';
             securityReport += `### ${vuln.type || '未分類の問題'}\n`; // Removed index
-            securityReport += `*   **リスクスコア:** ${vulnRiskScoreText} (重要度: ${vuln.severity || 'N/A'})\\n`; // Double backslash fixed
+            securityReport += `*   **危険度:** ${vulnRiskScoreText} (重要度: ${vuln.severity || 'N/A'})\n`; // Changed label and fixed newline
             securityReport += `*   **説明:** ${vuln.description_jp || vuln.description || '詳細なし'}\n`; // Fallback to english
              if (vuln.mitigation) {
                  securityReport += `*   **推奨される対策:** ${vuln.mitigation.recommended_fix_jp || '情報なし'}\n`;
@@ -42169,7 +42169,7 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDi
   }
 
   // --- 3. Set Action Outputs & Issue Warning/Error ---
-  console.log(`レポート生成完了。総合リスクスコア: ${finalOverallRiskScore}, マージ判断: ${finalMergeRecommendation}`);
+  console.log(`レポート生成完了。危険度 (総合): ${finalOverallRiskScore}, マージ判断: ${finalMergeRecommendation}`);
 
   // Set action output
   core.setOutput('analysis_report', securityReport);
@@ -42177,7 +42177,7 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDi
   core.setOutput('merge_recommendation', finalMergeRecommendation);
 
   // Issue Warning or Error instead of Failing the step
-  const reportSummary = `総合リスクスコア: ${finalOverallRiskScore}/10。マージ判断: ${finalMergeRecommendation}。詳細はレポートを確認してください。`;
+  const reportSummary = `危険度 (総合): ${finalOverallRiskScore}/10。マージ判断: ${finalMergeRecommendation}。詳細はレポートを確認してください。`;
 
   if (finalMergeRecommendation === 'マージ前に対応必須' || finalOverallRiskScore >= 8) {
       core.error(`重要度の高いセキュリティリスクが検出されました。${reportSummary}`);
