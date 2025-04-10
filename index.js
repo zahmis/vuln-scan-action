@@ -29,57 +29,75 @@ async function analyzeDependencies(diff) {
       messages: [
         {
           role: "system",
-          content: `You are a security expert specializing in dependency analysis and vulnerability assessment. Your task is to:
+          content: `
+Analyze the dependency changes in the provided diff for a project. Focus on security implications.
+The diff content is:
+\`\`\`diff
+${diff}
+\`\`\`
 
-1. Identify all dependency changes in the provided diff
-2. For each dependency:
-   - Compare version changes and analyze semantic versioning implications
-   - Research and cite specific CVEs or security advisories
-   - Review release notes, changelogs, and relevant GitHub issues
-   - Analyze potential security impact of the changes
-   - Check for transitive dependency conflicts or vulnerabilities
-   - Examine implementation changes that might affect security
+Identify each dependency change (added, removed, updated). For updates, specify the 'from' and 'to' versions.
+For each changed dependency, provide a detailed security assessment:
+1.  **Version Implications:** Analyze the semantic versioning (major, minor, patch) and its likely impact (breaking changes, new features, bug fixes).
+2.  **Security Findings:**
+    *   Research known CVEs or security advisories associated with BOTH the 'from' and 'to' versions. List relevant CVE IDs.
+    *   Describe the nature of the vulnerabilities (e.g., RCE, XSS, DoS, data exposure).
+    *   Identify potentially affected components or functionalities in the application.
+    *   Provide evidence: Link to release notes, security advisories, or relevant code changes if possible.
+3.  **Risk Score (0-10):** Assign a risk score based on the severity and likelihood of vulnerabilities fixed or introduced. 10 is highest risk.
+4.  **Upgrade Recommendation (Japanese):** State clearly whether upgrading is recommended (例: 「強く推奨」、「推奨」、「検討」、「不要」).
+5.  **Recommendations (Japanese):** Suggest specific actions (e.g., "Upgrade immediately", "Monitor closely", "Test thoroughly"). Mention alternatives if applicable. Note any specific monitoring needed.
 
-3. Provide a comprehensive security assessment including:
-   - Direct security implications
-   - Indirect security risks (e.g., dependency chain issues)
-   - Compatibility concerns
-   - Specific code areas that need review
-   - Concrete mitigation recommendations
+Provide an **Overall Risk Assessment (Japanese):**
+1.  **Overall Risk Score (0-10):** A single score summarizing the risk of all dependency changes.
+2.  **Risk Level (Japanese):** Categorize the overall risk (例: 「低」、「中」、「高」、「緊急」).
+3.  **Summary (Japanese):** Briefly explain the main risks and benefits of the changes.
+4.  **Requires Immediate Action (Japanese):** State if immediate action is needed (例: 「あり」、「なし」).
+5.  **Merge Recommendation (Japanese):** Recommend whether to merge the changes based on the security analysis (例: 「マージ可」、「注意してマージ」、「マージ前に対応必須」).
 
-Return ONLY the JSON data without any markdown formatting or code block indicators. The response should start directly with { and end with }:
+Respond ONLY with a JSON object containing two top-level keys: 'dependencies' (an array of objects, one for each changed dependency) and 'overall_risk_assessment'. Follow this structure precisely. Do not include any markdown formatting or introductory text.
+
+JSON Structure:
 {
   "dependencies": [
     {
-      "name": "package name",
-      "version_change": {
-        "from": "old version",
-        "to": "new version"
+      "name": "string",
+      "change_type": "added|removed|updated",
+      "version_change": { // Only if change_type is 'updated'
+        "from": "string",
+        "to": "string"
       },
+      "version_implications": "string",
       "security_findings": {
-        "severity": "critical|high|medium|low",
-        "cves": ["CVE-ID"],
-        "description": "Detailed security impact description",
-        "affected_components": ["specific components or features affected"],
+        "severity": "string (e.g., high, medium, low, critical)", // Highest severity found
+        "cves": ["string"],
+        "description": "string",
+        "affected_components": ["string"],
         "evidence": {
-          "release_notes": "relevant release note excerpts",
-          "implementation_changes": "security-relevant code changes",
-          "references": ["links to issues, PRs, or discussions"]
+          "release_notes": "string",
+          "implementation_changes": "string",
+          "references": ["string"]
         }
       },
-      "recommendations": {
-        "actions": ["specific actions to take"],
-        "alternatives": ["alternative solutions if applicable"],
-        "additional_monitoring": ["areas or components to monitor"]
+      "risk_score": "number (0-10)",
+      "upgrade_recommendation_jp": "string", // Japanese text
+      "recommendations_jp": { // Japanese text
+        "actions": ["string"],
+        "alternatives": ["string"],
+        "additional_monitoring": ["string"]
       }
     }
+    // ... more dependencies
   ],
   "overall_risk_assessment": {
-    "risk_level": "critical|high|medium|low",
-    "summary": "Overall security impact summary",
-    "requires_immediate_action": boolean
+    "overall_risk_score": "number (0-10)",
+    "risk_level_jp": "string", // Japanese text
+    "summary_jp": "string", // Japanese text
+    "requires_immediate_action_jp": "string", // Japanese text
+    "merge_recommendation_jp": "string" // Japanese text
   }
-}`
+}
+`
         },
         {
           role: "user",
@@ -113,7 +131,7 @@ Return ONLY the JSON data without any markdown formatting or code block indicato
   }
 }
 
-async function analyzeVulnerabilities(diff, severityLevel) {
+async function analyzeVulnerabilities(diff, dependencies) {
   try {
     const apiKey = core.getInput('perplexity-api-key');
     const response = await axios.post(PERPLEXITY_API_ENDPOINT, {
@@ -121,61 +139,77 @@ async function analyzeVulnerabilities(diff, severityLevel) {
       messages: [
         {
           role: "system",
-          content: `You are a security vulnerability analyzer with deep expertise in code review and security assessment. Your task is to:
+          content: `
+Analyze the provided code diff for potential security vulnerabilities and assess the security implications of the dependency changes listed.
 
-1. Perform deep analysis of code changes:
-   - Identify potential security vulnerabilities
-   - Analyze code patterns and anti-patterns
-   - Review API usage and security implications
-   - Check for common vulnerability types (OWASP Top 10, etc.)
-   - Examine error handling and input validation
-   - Assess authentication and authorization changes
+Code Diff:
+\`\`\`diff
+${diff}
+\`\`\`
 
-2. Consider broader security context:
-   - Impact on existing security controls
-   - Integration points and trust boundaries
-   - Data flow security implications
-   - Configuration changes affecting security
-   - Compliance implications
+Dependency Analysis Summary:
+\`\`\`json
+${JSON.stringify(dependencies, null, 2)}
+\`\`\`
 
-3. Provide detailed vulnerability assessment with severity level ${severityLevel} or higher.
+Perform a deep security analysis focusing on:
+1.  **Code Changes Analysis:**
+    *   Identify specific code patterns or anti-patterns related to security (e.g., improper input validation, hardcoded secrets, insecure API usage, race conditions, error handling flaws).
+    *   Check for common vulnerability types (OWASP Top 10): Injection, Broken Authentication, Sensitive Data Exposure, XXE, Broken Access Control, Security Misconfiguration, XSS, Insecure Deserialization, Using Components with Known Vulnerabilities, Insufficient Logging & Monitoring.
+    *   Analyze changes in authentication, authorization, session management, and data handling logic.
+2.  **Dependency Interaction:** Assess how the code changes interact with the updated dependencies. Are new dependency features used securely? Are vulnerabilities in dependencies mitigated or potentially exposed by the code changes?
+3.  **Vulnerability Assessment:** For each identified potential vulnerability:
+    *   Assign a **Severity** (critical, high, medium, low).
+    *   Assign a **Risk Score (0-10)** based on likelihood and impact. 10 is highest risk.
+    *   Provide a detailed **Description** of the vulnerability.
+    *   Include **Technical Details:** Affected code snippets, attack vectors, impact analysis, root cause.
+    *   Provide **Evidence:** Code location (file path, line numbers), proof-of-concept ideas (if applicable), related CVEs (if the pattern matches a known type).
+    *   Suggest **Mitigation:** Recommended fixes, alternative solutions, security best practices.
+4.  **Overall Assessment (Japanese):**
+    *   **Overall Risk Score (0-10):** Combine findings from code changes and dependency interactions.
+    *   **Merge Recommendation (Japanese):** Based on the vulnerabilities found (例: 「マージ可」、「注意してマージ」、「マージ前に対応必須」).
+    *   Provide **Analysis Metadata:** Scan coverage, confidence level, limitations of the analysis.
 
-Return ONLY the JSON data without any markdown formatting or code block indicators. The response should start directly with { and end with }:
+Respond ONLY with a JSON object. Do not include any markdown formatting or introductory text.
+
+JSON Structure:
 {
   "vulnerabilities": [
     {
       "severity": "critical|high|medium|low",
-      "type": "vulnerability category (e.g., XSS, CSRF, etc.)",
-      "description": "Detailed description of the vulnerability",
+      "risk_score": "number (0-10)",
+      "type": "string (e.g., Injection, XSS, Dependency Issue, Misconfiguration)",
+      "description": "string",
       "technical_details": {
-        "affected_code": "specific code snippets or patterns",
-        "attack_vectors": ["possible attack scenarios"],
-        "impact_analysis": "potential security impact",
-        "root_cause": "underlying security issue"
+        "affected_code": "string",
+        "attack_vectors": ["string"],
+        "impact_analysis": "string",
+        "root_cause": "string"
       },
       "evidence": {
-        "code_location": "file and line numbers",
-        "proof_of_concept": "how the vulnerability could be exploited",
-        "related_cves": ["similar CVEs if applicable"]
+        "code_location": "string",
+        "proof_of_concept": "string",
+        "related_cves": ["string"]
       },
       "mitigation": {
-        "recommended_fix": "specific code changes or security controls",
-        "alternative_solutions": ["other possible fixes"],
-        "security_best_practices": ["relevant security guidelines"]
-      },
-      "risk_assessment": {
-        "likelihood": "high|medium|low",
-        "impact": "high|medium|low",
-        "exploit_complexity": "high|medium|low"
+        "recommended_fix_jp": "string", // Japanese text
+        "alternative_solutions_jp": ["string"], // Japanese text
+        "security_best_practices_jp": ["string"] // Japanese text
       }
     }
+    // ... more vulnerabilities
   ],
+  "overall_risk_assessment": {
+      "overall_risk_score": "number (0-10)",
+      "merge_recommendation_jp": "string" // Japanese text
+  },
   "analysis_metadata": {
-    "scan_coverage": ["areas analyzed"],
+    "scan_coverage": ["string"],
     "confidence_level": "high|medium|low",
-    "limitations": ["any limitations in the analysis"]
+    "limitations": ["string"]
   }
-}`
+}
+`
         },
         {
           role: "user",
@@ -256,7 +290,7 @@ async function run() {
         console.log('依存関係の分析結果:', JSON.stringify(dependencyAnalysis, null, 2));
 
         // 脆弱性スキャン
-        const vulnerabilityResults = await analyzeVulnerabilities(diff, severityLevel);
+        const vulnerabilityResults = await analyzeVulnerabilities(diff, dependencyAnalysis.dependencies);
         console.log('脆弱性スキャン結果:', JSON.stringify(vulnerabilityResults, null, 2));
 
         // 結果の処理
@@ -264,7 +298,7 @@ async function run() {
         let securityReport = '## セキュリティ分析レポート\n\n';
 
         // 依存関係の分析結果を追加
-        if (dependencyAnalysis && dependencyAnalysis.dependencies) {
+        if (dependencyAnalysis?.dependencies) {
           securityReport += '### 依存関係の分析\n\n';
           
           for (const dep of dependencyAnalysis.dependencies) {
@@ -299,10 +333,10 @@ async function run() {
           }
 
           if (dependencyAnalysis.overall_risk_assessment) {
-            securityReport += `### 全体的なリスク評価\n`;
-            securityReport += `- リスクレベル: ${dependencyAnalysis.overall_risk_assessment.risk_level}\n`;
-            securityReport += `- 概要: ${dependencyAnalysis.overall_risk_assessment.summary}\n`;
-            securityReport += `- 即時対応の必要性: ${dependencyAnalysis.overall_risk_assessment.requires_immediate_action ? 'あり' : 'なし'}\n\n`;
+            securityReport += '### 全体的なリスク評価\n';
+            securityReport += `- リスクレベル: ${dependencyAnalysis.overall_risk_assessment.risk_level_jp}\n`;
+            securityReport += `- 概要: ${dependencyAnalysis.overall_risk_assessment.summary_jp}\n`;
+            securityReport += `- 即時対応の必要性: ${dependencyAnalysis.overall_risk_assessment.requires_immediate_action_jp === 'あり' ? 'あり' : 'なし'}\n\n`;
           }
         }
 
@@ -317,7 +351,7 @@ async function run() {
               hasHighSeverity = true;
             }
             
-            securityReport += '#### ' + (vuln.type || '未分類の脆弱性') + '\n';
+            securityReport += `#### ${vuln.type || '未分類の脆弱性'}\n`;
             securityReport += `- 重要度: ${vuln.severity}\n`;
             securityReport += `- 説明: ${vuln.description}\n`;
 
@@ -333,9 +367,9 @@ async function run() {
 
             if (vuln.mitigation) {
               securityReport += '- 対策:\n';
-              securityReport += `  - 推奨される修正: ${vuln.mitigation.recommended_fix}\n`;
-              if (vuln.mitigation.security_best_practices) {
-                securityReport += `  - セキュリティベストプラクティス: ${vuln.mitigation.security_best_practices.join(', ')}\n`;
+              securityReport += `  - 推奨される修正: ${vuln.mitigation.recommended_fix_jp}\n`;
+              if (vuln.mitigation.security_best_practices_jp) {
+                securityReport += `  - セキュリティベストプラクティス: ${vuln.mitigation.security_best_practices_jp.join(', ')}\n`;
               }
             }
 
