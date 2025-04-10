@@ -664,3 +664,5 @@ async function run() {
     core.setFailed(`アクションの初期化または実行中に致命的なエラーが発生しました: ${error.message}`);
   }
 }
+
+run();
