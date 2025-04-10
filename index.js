@@ -371,7 +371,7 @@ ${codeDiff}
     const result = await chatSession.sendMessage(prompt);
     const analysisText = result.response.text();
     console.log(`Gemini analysis complete for ${dependencyName}.`);
-    return analysisText.trim() || 'Geminiからの応答が空でした。';
+    return analysisText.trim() || '特筆すべき点なし';
 
   } catch (error) {
     console.error(`Error analyzing code diff for ${dependencyName} with Gemini: ${error.message}`);
