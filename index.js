@@ -51,10 +51,7 @@ const REPORT_LABELS_JP = {
     noVulnerabilitiesFound: '今回の変更に関連する新たな脆弱性や懸念事項は検出されませんでした。'
 };
 
-// === End Constants ===
-
 // --- GitHub Interaction ---
-
 async function getDiffContent(octokit, owner, repo, pullNumber) {
   try {
     const response = await octokit.rest.pulls.get({
@@ -100,7 +97,6 @@ async function postComment(octokit, owner, repo, issueNumber, body) {
 
 
 // --- API Calls ---
-
 async function analyzeDependencies(diff) {
   const apiKey = core.getInput('perplexity-api-key');
   if (!apiKey) {
@@ -306,7 +302,6 @@ ${JSON.stringify(depContext, null, 2)}
     }
 
     console.log('Vulnerability analysis completed successfully.');
-    // console.log('Raw Vulnerability Analysis Result:', JSON.stringify(analysisResult, null, 2));
     return analysisResult;
 
   } catch (error) {
@@ -316,7 +311,7 @@ ${JSON.stringify(depContext, null, 2)}
     } else if (error.request) {
       console.error('API No Response Received');
     }
-    return { vulnerabilities: [] }; // Return empty array on error
+    return { vulnerabilities: [] };
   }
 }
 
@@ -384,7 +379,6 @@ ${codeDiff}
 
 
 // --- Git Operations ---
-
 function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), TEMP_DIR_PREFIX));
 }
@@ -463,20 +457,6 @@ async function getDependencyCodeDiff(dependencyName, versionFrom, versionTo) {
 
 
 // --- Report Generation ---
-
-// Helper to get severity score (higher number is more severe)
-function getSeverityScore(severity) {
-    const lowerSeverity = severity?.toLowerCase();
-    switch(lowerSeverity) {
-        case 'critical': return 4;
-        case 'high': return 3;
-        case 'medium': return 2;
-        case 'low': return 1;
-        default: return 0;
-    }
-}
-
-
 function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDiffAnalyses) {
   let report = '## セキュリティ分析レポート\n\n';
 
@@ -546,8 +526,7 @@ function generateSecurityReport(dependencyAnalysis, vulnerabilityResults, codeDi
 }
 
 
-// --- Main Execution Logic ---
-
+// --- Main Logic ---
 async function run() {
   try {
     const token = core.getInput('github-token', { required: true });
